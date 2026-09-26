@@ -1,0 +1,30 @@
+manifestVersion: 1
+name: '@vcjdeboer/s3-panel'
+version: 2026.09.26.3
+description: >
+  Drive an ESP32-S3 with a screen from swamp. One model type, `s3-panel`, is
+  everything `@vcjdeboer/s3-device` does plus typed methods for the display:
+  `text`, `fill`, `clear`, `backlight` and `logo`. The board renders and the host says
+  what to render, so no pixels cross the wire. Built against a Guition
+  JC3248W535 (3.5" 320x480 AXS15231B), but any firmware answering the same
+  commands will do.
+repository: 'https://github.com/vcjdeboer/s3-panel'
+license: MIT
+models:
+  - s3_panel.ts
+workflows: []
+vaults: []
+drivers: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE
+  - extensions/files/serial_worker.ts
+binaries: []
+dependencies: []
+platforms:
+  - darwin-aarch64
+  - darwin-x86_64
+  - linux-x86_64
+  - linux-aarch64

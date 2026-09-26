@@ -1,0 +1,89 @@
+/**
+ * Structural tests for `@vcjdeboer/s3-panel`.
+ *
+ * No board and no swamp needed. The interesting one is `assertDrawable`: the
+ * firmware splits lines on `|` and reads one command per line, so text
+ * containing either would silently become extra lines or extra commands. That
+ * has to be rejected before anything reaches the wire, and it cannot be
+ * exercised through a shell (the separator is awkward to quote), so it is
+ * pinned here.
+ *
+ * Run: `~/.swamp/deno/deno test -A extensions/models/s3_panel_test.ts`
+ *
+ * @module
+ */
+
+import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
+import { assertDrawable, model } from "./s3_panel.ts";
+
+Deno.test("the model type and version are well formed", () => {
+  assertEquals(model.type, "@vcjdeboer/s3-panel");
+  assert(
+    /^\d{4}\.\d{2}\.\d{2}\.\d+$/.test(model.version),
+    `version ${model.version} is not CalVer YYYY.MM.DD.MICRO`,
+  );
+});
+
+Deno.test("the panel inherits the whole base and adds exactly the screen methods", () => {
+  const names = Object.keys(model.methods).sort();
+  // Inherited from the shared base, unchanged.
+  for (const base of [
+    "detect",
+    "hold",
+    "ping",
+    "read",
+    "release",
+    "send",
+    "status",
+    "write",
+  ]) {
+    assert(names.includes(base), `missing inherited method ${base}`);
+  }
+  // Added here.
+  for (const own of ["backlight", "clear", "fill", "text"]) {
+    assert(names.includes(own), `missing screen method ${own}`);
+  }
+  assertEquals(names.length, 13, "unexpected extra methods");
+});
+
+Deno.test("the panel adds its own draw spec on top of the base specs", () => {
+  const specs = Object.keys(model.resources);
+  assert(specs.includes("draw"), "no draw spec");
+  for (const base of ["devices", "state", "exchange", "sent", "capture", "holder"]) {
+    assert(specs.includes(base), `missing inherited spec ${base}`);
+  }
+});
+
+Deno.test("every screen write targets the draw spec with a prefixed record name", () => {
+  const src = Deno.readTextFileSync(new URL("./s3_panel.ts", import.meta.url));
+  const writes = [...src.matchAll(/writeResource\(\s*"(\w+)",\s*"([\w-]+)"/g)];
+  // All four screen methods funnel through one `draw` helper, so one site.
+  assertEquals(writes.length, 1);
+  const [, spec, instance] = writes[0];
+  assertEquals(spec, "draw");
+  assert(instance.startsWith("draw-"), `${instance} not prefixed by draw`);
+});
+
+Deno.test("a line containing the separator is refused before it reaches the wire", () => {
+  const err = assertThrows(() => assertDrawable(["fine", "not|fine"]));
+  assert(
+    (err as Error).message.includes("line separator"),
+    "the error should explain why the separator is refused",
+  );
+});
+
+Deno.test("a line containing a newline or carriage return is refused", () => {
+  assertThrows(() => assertDrawable(["a\nb"]));
+  assertThrows(() => assertDrawable(["a\rb"]));
+});
+
+Deno.test("no lines at all is refused, pointing at clear instead", () => {
+  const err = assertThrows(() => assertDrawable([]));
+  assert((err as Error).message.includes("clear"));
+});
+
+Deno.test("ordinary text is allowed, including spaces and punctuation", () => {
+  assertDrawable(["S3 PANEL", "ready: 3 of 3", "temp 23.4 C"]);
+  // An empty line is a legitimate blank row, not an error.
+  assertDrawable(["top", "", "bottom"]);
+});

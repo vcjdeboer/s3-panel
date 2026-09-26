@@ -2,10 +2,12 @@
 
 Drive an ESP32-S3 **with a screen** from [swamp](https://github.com/swamp-club/swamp).
 
+![Swamp Club logo on the JC3248W535 panel](logo-on-screen.jpg)
+
 One model type, `@vcjdeboer/s3-panel`. It is everything
 [`@vcjdeboer/s3-device`](https://github.com/vcjdeboer/esp32) does — `detect`,
 `ping`, `status`, `send`, `write`, `read`, `hold`, `release` — plus typed methods
-for the display: `text`, `fill`, `clear` and `backlight`.
+for the display: `text`, `fill`, `clear`, `backlight` and `logo`.
 
 The board renders and the host says what to render. No pixels cross the wire,
 which is what makes a 320x480 panel usable over a serial link at all.
@@ -42,6 +44,7 @@ global arguments are the same as `s3-device`; see its README.
 | `fill` | `color` | One of black, white, red, green, blue, yellow, cyan, magenta. |
 | `clear` | none | Blanks to black, leaves the backlight alone. |
 | `backlight` | `on` (boolean) | Off keeps the framebuffer, so a dark panel is not evidence that drawing failed. |
+| `logo` | none | Show the Swamp Club logo. Touch the screen to trigger an explosion; the logo redraws after. |
 
 Each writes a `draw-latest` record carrying the command sent, the board's reply,
 `outcome`, `observedAt` and `elapsedMs`.
@@ -68,6 +71,7 @@ Answer one JSON object per command line. The commands this type sends:
 | `fill red` | `{"ok":true,"color":"red"}` |
 | `clear` | `{"ok":true}` |
 | `backlight on` | `{"ok":true,"backlight":true}` |
+| `logo` | `{"ok":true}` |
 
 A reply with `"ok":false` is recorded as `outcome=error` and then thrown, with
 the board's own `error` string in the message.

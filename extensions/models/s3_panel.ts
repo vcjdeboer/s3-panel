@@ -89,6 +89,36 @@ const TouchStateSchema = z.object({
   elapsedMs: z.number(),
 });
 
+const ScreenPushSchema = z.object({
+  elements: z.array(z.record(z.string(), z.unknown())),
+  rendered: z.number(),
+  zones: z.number(),
+  outcome: OUTCOME_FIELD,
+  observedAt: z.string(),
+  elapsedMs: z.number(),
+});
+
+const ZoneSchema = z.object({
+  id: z.string(),
+  x: z.number(),
+  y: z.number(),
+  timeout: z.boolean(),
+  outcome: OUTCOME_FIELD,
+  observedAt: z.string(),
+  elapsedMs: z.number(),
+});
+
+const ApprovalSchema = z.object({
+  workflow: z.string(),
+  step: z.string(),
+  prompt: z.string(),
+  decision: z.string(),
+  source: z.string().describe("Where the decision came from: panel or prompt"),
+  decidedAt: z.string(),
+  outcome: OUTCOME_FIELD,
+  elapsedMs: z.number(),
+});
+
 /** Unsolicited events captured during a listen window. */
 const EventsSchema = z.object({
   events: z.array(z.record(z.string(), z.unknown())).describe(
@@ -186,11 +216,36 @@ export function assertDrawable(lines: string[]): void {
   }
 }
 
+function splitPrompt(text: string, maxChars = 25): string[] {
+  const words = text.split(/\s+/);
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length > maxChars && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
 /** Model definition for an ESP32-S3 carrying a display. */
 export const model = {
   type: "@vcjdeboer/s3-panel",
-  version: "2026.09.27.4",
+  version: "2026.09.27.5",
   globalArguments: GlobalArgsSchema,
+  upgrades: [
+    {
+      toVersion: "2026.09.27.5",
+      description:
+        "Adds screen, zonewait and approve; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   resources: {
     ...baseResources(),
     "events": {
@@ -215,6 +270,23 @@ export const model = {
         "The latched touch state: count since last clear, last coordinates",
       schema: TouchStateSchema,
       ...OBSERVATIONAL,
+    },
+    "screen": {
+      description:
+        "A screen definition pushed to the panel and its render result",
+      schema: ScreenPushSchema,
+      ...OBSERVATIONAL,
+    },
+    "zone": {
+      description: "A touch zone tap event from a rendered screen",
+      schema: ZoneSchema,
+      ...OBSERVATIONAL,
+    },
+    "approval": {
+      description:
+        "A workflow approval interaction: prompt shown, decision recorded",
+      schema: ApprovalSchema,
+      ...EVIDENTIARY,
     },
   },
   methods: {
@@ -267,7 +339,7 @@ export const model = {
         const t0 = performance.now();
         const r = await withLink(ctx, ({ link }) => link.drainEvents());
         if (!r.ok) throw new Error(`drain failed: ${r.error}`);
-        const events = (r.events as Record<string, unknown>[] | undefined) ??
+        const events = ((r as { events?: Record<string, unknown>[] }).events) ??
           [];
         const count = events.length;
         ctx.logger.info("drained {n} buffered event(s)", { n: count });
@@ -607,6 +679,273 @@ export const model = {
               "touch-latest, outcome=timeout)",
           );
         }
+        return { dataHandles: [handle] };
+      },
+    },
+
+    screen: {
+      description:
+        "Push a screen definition to the panel. Sends screen clear, then screen add for each element, then screen show. The firmware renders a mini logo at the top and stacks elements below it.",
+      arguments: z.object({
+        elements: z
+          .array(z.record(z.string(), z.unknown()))
+          .describe("Array of element objects (label, button, gap)"),
+        timeoutMs: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Per-command reply timeout in ms"),
+      }),
+      execute: async (
+        args: { elements: Record<string, unknown>[]; timeoutMs?: number },
+        ctx: MethodContext,
+      ) => {
+        const g = ctx.globalArgs;
+        const cmdTimeout = args.timeoutMs ?? g.timeoutMs ?? 3000;
+        const t0 = performance.now();
+
+        await sendLine(ctx, "screen clear", cmdTimeout);
+
+        for (const el of args.elements) {
+          const r = await sendLine(
+            ctx,
+            `screen add ${JSON.stringify(el)}`,
+            cmdTimeout,
+          );
+          if (replyFailed(r.response)) {
+            throw new Error(
+              `screen add rejected: ${JSON.stringify(r.response)}`,
+            );
+          }
+        }
+
+        const r = await sendLine(ctx, "screen show", cmdTimeout);
+        const failed = replyFailed(r.response);
+        const outcome = !r.response ? "timeout" : failed ? "error" : "ok";
+
+        const handle = await ctx.writeResource("screen", "screen-latest", {
+          elements: args.elements,
+          rendered: (r.response?.elements as number) ?? 0,
+          zones: (r.response?.zones as number) ?? 0,
+          outcome,
+          observedAt: new Date().toISOString(),
+          elapsedMs: Math.round(performance.now() - t0),
+        });
+
+        if (!r.response) throw new Error("no reply to screen show");
+        if (failed) {
+          throw new Error(
+            `screen show failed: ${JSON.stringify(r.response)}`,
+          );
+        }
+        return { dataHandles: [handle] };
+      },
+    },
+
+    zonewait: {
+      description:
+        "Wait for a touch zone to be tapped on a rendered screen. Returns the zone id that was hit, or times out.",
+      arguments: z.object({
+        waitMs: z
+          .number()
+          .int()
+          .positive()
+          .default(43_200_000)
+          .describe("How long to wait for a tap in ms (default 12h)"),
+      }),
+      execute: async (
+        args: { waitMs?: number },
+        ctx: MethodContext,
+      ) => {
+        const timeoutMs = args.waitMs ?? 43_200_000;
+        const t0 = performance.now();
+
+        const r = await sendLine(
+          ctx,
+          `screen wait ${timeoutMs}`,
+          timeoutMs + 2000,
+        );
+        const timedOut = !!(r.response?.timeout);
+        const outcome = !r.response ? "timeout" : timedOut ? "timeout" : "ok";
+
+        const handle = await ctx.writeResource("zone", "zone-latest", {
+          id: (r.response?.id as string) ?? "",
+          x: (r.response?.x as number) ?? 0,
+          y: (r.response?.y as number) ?? 0,
+          timeout: timedOut,
+          outcome,
+          observedAt: new Date().toISOString(),
+          elapsedMs: Math.round(performance.now() - t0),
+        });
+
+        if (!r.response) {
+          throw new Error(
+            `no reply to screen wait within ${timeoutMs} ms`,
+          );
+        }
+        return { dataHandles: [handle] };
+      },
+    },
+
+    approve: {
+      description:
+        "Render a workflow approval on the panel and wait for a physical tap. Shows the workflow name, step, prompt, and APPROVE / REJECT buttons. Records the decision as an evidentiary data record.",
+      arguments: z.object({
+        workflow: z.string().describe("Workflow name (shown on screen)"),
+        step: z.string().describe("Step name (shown on screen)"),
+        prompt: z.string().describe("Approval prompt text"),
+        waitMs: z
+          .number()
+          .int()
+          .positive()
+          .default(43_200_000)
+          .describe("How long to wait for a tap in ms (default 12h)"),
+      }),
+      execute: async (
+        args: {
+          workflow: string;
+          step: string;
+          prompt: string;
+          waitMs?: number;
+        },
+        ctx: MethodContext,
+      ) => {
+        const timeoutMs = args.waitMs ?? 43_200_000;
+        const g = ctx.globalArgs;
+        const cmdTimeout = g.timeoutMs ?? 3000;
+        const t0 = performance.now();
+
+        const promptLines = splitPrompt(args.prompt);
+        const elements: Record<string, unknown>[] = [
+          { type: "gap", h: 10 },
+          {
+            type: "label",
+            text: args.workflow,
+            size: 2,
+            color: "cyan",
+            align: "center",
+          },
+          {
+            type: "label",
+            text: args.step,
+            size: 1,
+            color: "blue",
+            align: "center",
+          },
+          { type: "gap", h: 10 },
+          ...promptLines.map((line: string) => ({
+            type: "label",
+            text: line,
+            size: 2,
+            color: "white",
+            align: "left",
+          })),
+          { type: "gap", h: 10 },
+          {
+            type: "button",
+            id: "approve",
+            text: "APPROVE",
+            bg: "cyan",
+            color: "black",
+            h: 45,
+          },
+          { type: "gap", h: 10 },
+          {
+            type: "button",
+            id: "reject",
+            text: "REJECT",
+            border: "pink",
+            color: "pink",
+            h: 45,
+          },
+        ];
+
+        await sendLine(ctx, "screen clear", cmdTimeout);
+        for (const el of elements) {
+          const r = await sendLine(
+            ctx,
+            `screen add ${JSON.stringify(el)}`,
+            cmdTimeout,
+          );
+          if (replyFailed(r.response)) {
+            throw new Error(
+              `screen add rejected: ${JSON.stringify(r.response)}`,
+            );
+          }
+        }
+        const showR = await sendLine(ctx, "screen show", cmdTimeout);
+        if (!showR.response || replyFailed(showR.response)) {
+          throw new Error("screen show failed");
+        }
+
+        const r = await sendLine(
+          ctx,
+          `screen wait ${timeoutMs}`,
+          timeoutMs + 2000,
+        );
+        const timedOut = !!(r.response?.timeout);
+        const zoneId = (r.response?.id as string) ?? "";
+
+        let decision: string;
+        if (timedOut || !r.response) {
+          decision = "timeout";
+        } else if (zoneId === "approve") {
+          decision = "approved";
+        } else if (zoneId === "reject") {
+          decision = "rejected";
+        } else {
+          decision = "unknown";
+        }
+
+        const confirmColor = decision === "approved"
+          ? "cyan"
+          : decision === "rejected"
+          ? "pink"
+          : "yellow";
+        await sendLine(ctx, "screen clear", cmdTimeout);
+        await sendLine(
+          ctx,
+          `screen add ${
+            JSON.stringify({
+              type: "gap",
+              h: 40,
+            })
+          }`,
+          cmdTimeout,
+        );
+        await sendLine(
+          ctx,
+          `screen add ${
+            JSON.stringify({
+              type: "label",
+              text: decision.toUpperCase(),
+              size: 3,
+              color: confirmColor,
+              align: "center",
+            })
+          }`,
+          cmdTimeout,
+        );
+        await sendLine(ctx, "screen show", cmdTimeout);
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await sendLine(ctx, "logo", cmdTimeout);
+
+        const handle = await ctx.writeResource(
+          "approval",
+          "approval-latest",
+          {
+            workflow: args.workflow,
+            step: args.step,
+            prompt: args.prompt,
+            decision,
+            source: "panel",
+            decidedAt: new Date().toISOString(),
+            outcome: !r.response ? "timeout" : "ok",
+            elapsedMs: Math.round(performance.now() - t0),
+          },
+        );
+
         return { dataHandles: [handle] };
       },
     },

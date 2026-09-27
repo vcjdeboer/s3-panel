@@ -49,6 +49,24 @@ global arguments are the same as `s3-device`; see its README.
 Each writes a `draw-latest` record carrying the command sent, the board's reply,
 `outcome`, `observedAt` and `elapsedMs`.
 
+## Touch screens and approvals
+
+| Method | Arguments | Notes |
+| --- | --- | --- |
+| `screen` | `elements` (array), `timeoutMs` | Pushes a layout: `label`, `button` (with an `id`, which makes it a touch zone) and `gap` elements, stacked below a mini logo. Writes `screen-latest`. |
+| `zonewait` | `waitMs` (default 12 h) | Blocks until a button is tapped and writes `zone-latest` with its `id`, or a timeout. |
+| `approve` | `workflow`, `step`, `prompt`, `waitMs` | Renders APPROVE / REJECT for a workflow's `manual_approval` step, waits for a tap, flashes the decision, returns to the logo. Writes an evidentiary `approval-latest` record (`decision`, `source: panel`, `decidedAt`). |
+
+`approve` records the decision; it does not resume the workflow. Feed it to
+`swamp workflow approve` / `swamp workflow reject` yourself. It blocks until a
+tap, so run it in the background from an agent or script.
+
+```bash
+swamp model method run panel approve --input workflow=deploy \
+  --input step=approve-deploy --input 'prompt=Deploy firmware update to panel?'
+swamp data get panel approval-latest --json
+```
+
 ## Use
 
 ```bash
@@ -72,6 +90,10 @@ Answer one JSON object per command line. The commands this type sends:
 | `clear` | `{"ok":true}` |
 | `backlight on` | `{"ok":true,"backlight":true}` |
 | `logo` | `{"ok":true}` |
+| `screen clear` | `{"ok":true}` |
+| `screen add {"type":"button","id":"approve","text":"APPROVE"}` | `{"ok":true,"index":6}` |
+| `screen show` | `{"ok":true,"elements":7,"zones":2}` |
+| `screen wait 60000` | `{"ok":true,"id":"approve","x":160,"y":400}` on a tap, `{"ok":true,"timeout":true}` otherwise |
 
 A reply with `"ok":false` is recorded as `outcome=error` and then thrown, with
 the board's own `error` string in the message.

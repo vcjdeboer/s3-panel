@@ -27,8 +27,9 @@ Deno.test("the model type and version are well formed", () => {
 Deno.test("the panel inherits the whole base and adds exactly the screen methods", () => {
   const names = Object.keys(model.methods).sort();
   // Inherited from the shared base, unchanged.
-  for (const base of [
+  const base = [
     "detect",
+    "flash",
     "hold",
     "ping",
     "read",
@@ -36,14 +37,26 @@ Deno.test("the panel inherits the whole base and adds exactly the screen methods
     "send",
     "status",
     "write",
-  ]) {
-    assert(names.includes(base), `missing inherited method ${base}`);
-  }
-  // Added here.
-  for (const own of ["backlight", "clear", "fill", "text"]) {
-    assert(names.includes(own), `missing screen method ${own}`);
-  }
-  assertEquals(names.length, 13, "unexpected extra methods");
+  ];
+  // Added here: drawing, events, touch, touch screens and approvals.
+  const own = [
+    "approve",
+    "backlight",
+    "clear",
+    "drain",
+    "fill",
+    "listen",
+    "logo",
+    "screen",
+    "simtouch",
+    "text",
+    "touch",
+    "touchclear",
+    "touchstate",
+    "waittouch",
+    "zonewait",
+  ];
+  assertEquals(names, [...base, ...own].sort(), "method set changed");
 });
 
 Deno.test("the panel adds its own draw spec on top of the base specs", () => {
@@ -54,14 +67,17 @@ Deno.test("the panel adds its own draw spec on top of the base specs", () => {
   }
 });
 
-Deno.test("every screen write targets the draw spec with a prefixed record name", () => {
+Deno.test("every write targets a declared spec with a <spec>-latest record name", () => {
   const src = Deno.readTextFileSync(new URL("./s3_panel.ts", import.meta.url));
   const writes = [...src.matchAll(/writeResource\(\s*"(\w+)",\s*"([\w-]+)"/g)];
-  // All four screen methods funnel through one `draw` helper, so one site.
-  assertEquals(writes.length, 1);
-  const [, spec, instance] = writes[0];
-  assertEquals(spec, "draw");
-  assert(instance.startsWith("draw-"), `${instance} not prefixed by draw`);
+  assert(writes.length > 0, "no writeResource calls found");
+  // All text/fill/clear/backlight/logo writes funnel through one `draw` helper.
+  assertEquals(writes.filter(([, spec]) => spec === "draw").length, 1);
+  const specs = Object.keys(model.resources);
+  for (const [, spec, instance] of writes) {
+    assert(specs.includes(spec), `writes to undeclared spec ${spec}`);
+    assertEquals(instance, `${spec}-latest`);
+  }
 });
 
 Deno.test("a line containing the separator is refused before it reaches the wire", () => {

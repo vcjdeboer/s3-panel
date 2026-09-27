@@ -32,11 +32,14 @@ import {
   OUTCOME,
   resolveDevice,
   selectDevice,
+  jsonLines,
   stripEscapes,
   withLink,
   WORKER,
 } from "./device.ts";
 import type { WorkerArduinoFlash } from "./serial_link.ts";
+
+export { jsonLines, stripEscapes, withLink };
 
 /**
  * The `outcome` field every device record carries, re-exported so model types

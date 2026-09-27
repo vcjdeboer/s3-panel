@@ -33,11 +33,14 @@ import {
   baseResources,
   EVIDENTIARY,
   GlobalArgsSchema,
+  jsonLines,
   type MethodContext,
   OBSERVATIONAL,
   OUTCOME_FIELD,
   replyFailed,
   sendLine,
+  stripEscapes,
+  withLink,
 } from "./_lib/s3_base.ts";
 
 /** Colours the reference firmware knows by name. */
@@ -81,6 +84,19 @@ const TouchStateSchema = z.object({
   x: z.number().int().describe("X coordinate of the last touch"),
   y: z.number().int().describe("Y coordinate of the last touch"),
   t: z.number().describe("millis() timestamp of the last touch on the board"),
+  outcome: OUTCOME_FIELD,
+  observedAt: z.iso.datetime(),
+  elapsedMs: z.number(),
+});
+
+/** Unsolicited events captured during a listen window. */
+const EventsSchema = z.object({
+  events: z.array(z.record(z.string(), z.unknown())).describe(
+    'Unsolicited event lines (JSON with an "event" field) captured in the window',
+  ),
+  count: z.number(),
+  timeoutMs: z.number(),
+  raw: z.string(),
   outcome: OUTCOME_FIELD,
   observedAt: z.iso.datetime(),
   elapsedMs: z.number(),
@@ -173,10 +189,16 @@ export function assertDrawable(lines: string[]): void {
 /** Model definition for an ESP32-S3 carrying a display. */
 export const model = {
   type: "@vcjdeboer/s3-panel",
-  version: "2026.09.27.2",
+  version: "2026.09.27.3",
   globalArguments: GlobalArgsSchema,
   resources: {
     ...baseResources(),
+    "events": {
+      description:
+        "Unsolicited events the device pushed during a listen window",
+      schema: EventsSchema,
+      ...EVIDENTIARY,
+    },
     "draw": {
       description: "One drawing operation and what the board reported back",
       schema: DrawSchema,
@@ -197,6 +219,42 @@ export const model = {
   },
   methods: {
     ...baseMethods(),
+
+    listen: {
+      description:
+        "Listen for unsolicited event lines for timeoutMs. The board pushes " +
+        '{"event":"tap",...} lines when events are enabled (`events on`). ' +
+        "Each tap carries its sequence number, coordinates and timestamp. " +
+        "Returns all captured events as an array.",
+      arguments: z.object({
+        timeoutMs: z.number().int().positive().optional().describe(
+          "How long to listen; defaults to the global timeoutMs",
+        ),
+      }),
+      execute: async (args: { timeoutMs?: number }, ctx: MethodContext) => {
+        const g = ctx.globalArgs;
+        const timeoutMs = args.timeoutMs ?? g.timeoutMs;
+        const t0 = performance.now();
+        const r = await withLink(ctx, ({ link }) => link.read(timeoutMs));
+        if (!r.ok) throw new Error(`listen failed: ${r.error}`);
+        const raw = stripEscapes(r.data ?? "");
+        const events = jsonLines(raw).filter((o) => "event" in o);
+        ctx.logger.info("captured {n} event(s) in {ms} ms", {
+          n: events.length,
+          ms: timeoutMs,
+        });
+        const handle = await ctx.writeResource("events", "events-latest", {
+          events,
+          count: events.length,
+          timeoutMs,
+          raw,
+          outcome: "ok",
+          observedAt: new Date().toISOString(),
+          elapsedMs: Math.round(performance.now() - t0),
+        });
+        return { dataHandles: [handle] };
+      },
+    },
 
     text: {
       description:

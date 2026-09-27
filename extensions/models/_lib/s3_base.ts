@@ -25,9 +25,9 @@ import { SerialLink } from "./serial_link.ts";
 import {
   type DeviceCtx,
   DevicesSchema,
+  HolderSchema,
   holderSocketPath,
   holderState,
-  HolderSchema,
   lastJsonLine,
   OUTCOME,
   resolveDevice,
@@ -287,7 +287,9 @@ export function stateMethod(command: string, description: string): unknown {
       });
       if (!r.response) {
         throw new Error(
-          `no JSON reply to ${JSON.stringify(command)} within ${timeoutMs} ms ` +
+          `no JSON reply to ${
+            JSON.stringify(command)
+          } within ${timeoutMs} ms ` +
             `(got ${
               JSON.stringify(r.raw.slice(-160))
             }; recorded as state-latest, ` +

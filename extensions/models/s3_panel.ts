@@ -116,7 +116,9 @@ async function draw(
  */
 export function assertDrawable(lines: string[]): void {
   if (lines.length === 0) {
-    throw new Error("text needs at least one line (use `clear` for a blank screen)");
+    throw new Error(
+      "text needs at least one line (use `clear` for a blank screen)",
+    );
   }
   for (const line of lines) {
     if (line.includes(LINE_SEPARATOR)) {

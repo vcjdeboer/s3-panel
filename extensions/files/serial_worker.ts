@@ -68,6 +68,7 @@ type Cmd =
     arduinoCliPath?: string;
     timeoutMs?: number;
   }
+  | { verb: "drain-events" }
   | { verb: "close" }
   | { verb: "release" };
 
@@ -83,6 +84,9 @@ let openBaud = 0;
 let rx: Uint8Array[] = []; // bytes seen since last drain
 let lastByteAt = 0;
 let pumpDone: Promise<void> | null = null;
+const MAX_EVENT_BUF = 10_000;
+let eventBuf: Record<string, unknown>[] = [];
+let eventLineBuf = ""; // partial-line accumulator for event parsing
 let requestsServed = 0;
 const startedAt = new Date().toISOString();
 
@@ -148,6 +152,7 @@ async function open(device: string, baud = 115200) {
   openDevice = device;
   openBaud = baud;
   rx = [];
+  eventLineBuf = "";
   // Background read pump: keep pulling bytes so nothing is lost between commands.
   const f = rfile;
   pumpDone = (async () => {
@@ -160,8 +165,25 @@ async function open(device: string, baud = 115200) {
         break; // closed
       }
       if (n === null) break; // EOF
-      rx.push(buf.slice(0, n));
+      const chunk = buf.slice(0, n);
+      rx.push(chunk);
       lastByteAt = Date.now();
+      // Real-time event parsing: scan for complete JSON lines with "event" field.
+      eventLineBuf += dec.decode(chunk, { stream: true });
+      let nl: number;
+      while ((nl = eventLineBuf.indexOf("\n")) >= 0) {
+        const line = eventLineBuf.substring(0, nl).trim();
+        eventLineBuf = eventLineBuf.substring(nl + 1);
+        if (line.startsWith("{") && line.endsWith("}")) {
+          try {
+            const obj = JSON.parse(line) as Record<string, unknown>;
+            if ("event" in obj) {
+              eventBuf.push(obj);
+              if (eventBuf.length > MAX_EVENT_BUF) eventBuf.shift();
+            }
+          } catch { /* not valid JSON */ }
+        }
+      }
     }
     // Reached on close, but also when the device vanished (EIO/ENXIO/EOF).
     // Drop the handles so `status` reports open:false and a later open works.
@@ -517,6 +539,12 @@ async function handle(
 
     case "arduino-flash":
       return { reply: await arduinoFlash(cmd) };
+
+    case "drain-events": {
+      const events = eventBuf;
+      eventBuf = [];
+      return { reply: { ok: true, events, count: events.length } };
+    }
 
     case "close":
       await closePort();

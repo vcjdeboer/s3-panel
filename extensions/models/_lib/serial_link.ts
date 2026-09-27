@@ -482,6 +482,11 @@ export class SerialLink {
     );
   }
 
+  /** Drain all buffered unsolicited event lines from the holder. */
+  drainEvents(): Promise<WorkerReply> {
+    return this.#send({ verb: "drain-events" });
+  }
+
   /** Close the port but keep the worker (holder keeps serving). */
   closePort(): Promise<WorkerReply> {
     return this.#send({ verb: "close" });

@@ -189,7 +189,7 @@ export function assertDrawable(lines: string[]): void {
 /** Model definition for an ESP32-S3 carrying a display. */
 export const model = {
   type: "@vcjdeboer/s3-panel",
-  version: "2026.09.27.3",
+  version: "2026.09.27.4",
   globalArguments: GlobalArgsSchema,
   resources: {
     ...baseResources(),
@@ -248,6 +248,34 @@ export const model = {
           count: events.length,
           timeoutMs,
           raw,
+          outcome: "ok",
+          observedAt: new Date().toISOString(),
+          elapsedMs: Math.round(performance.now() - t0),
+        });
+        return { dataHandles: [handle] };
+      },
+    },
+
+    drain: {
+      description:
+        "Drain all buffered unsolicited events from the holder. Unlike " +
+        "listen (which opens a time window), drain returns events that the " +
+        "holder has already captured in the background — nothing is lost " +
+        "between drains, even if no method was running. Requires holder mode.",
+      arguments: z.object({}),
+      execute: async (_args: Record<string, never>, ctx: MethodContext) => {
+        const t0 = performance.now();
+        const r = await withLink(ctx, ({ link }) => link.drainEvents());
+        if (!r.ok) throw new Error(`drain failed: ${r.error}`);
+        const events = (r.events as Record<string, unknown>[] | undefined) ??
+          [];
+        const count = events.length;
+        ctx.logger.info("drained {n} buffered event(s)", { n: count });
+        const handle = await ctx.writeResource("events", "events-latest", {
+          events,
+          count,
+          timeoutMs: 0,
+          raw: events.map((e) => JSON.stringify(e)).join("\n"),
           outcome: "ok",
           observedAt: new Date().toISOString(),
           elapsedMs: Math.round(performance.now() - t0),

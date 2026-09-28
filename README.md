@@ -1,6 +1,9 @@
 # @vcjdeboer/s3-panel
 
 Drive an ESP32-S3 **with a screen** from [swamp](https://github.com/swamp-club/swamp).
+Built for the **Guition JC3248W535** (also sold under the diymore brand): an
+ESP32-S3 N16R8 with a 3.5" 320x480 capacitive touch display. See
+[Hardware](#hardware) for the pin map and firmware build.
 
 ![Swamp Club logo on the JC3248W535 panel](logo-on-screen.jpg)
 
@@ -14,7 +17,8 @@ which is what makes a 320x480 panel usable over a serial link at all.
 
 ## Hardware
 
-Built and verified on the diymore / Guition **JC3248W535**:
+Built and verified on the **Guition JC3248W535** (also sold under the
+diymore brand):
 
 | Part | Detail |
 | --- | --- |

@@ -5,12 +5,60 @@ Drive an ESP32-S3 **with a screen** from [swamp](https://github.com/swamp-club/s
 ![Swamp Club logo on the JC3248W535 panel](logo-on-screen.jpg)
 
 One model type, `@vcjdeboer/s3-panel`. It is everything
-[`@vcjdeboer/s3-device`](https://github.com/vcjdeboer/esp32) does — `detect`,
+[`@vcjdeboer/s3-device`](https://github.com/vcjdeboer/esp32-s3) does — `detect`,
 `ping`, `status`, `send`, `write`, `read`, `hold`, `release` — plus typed methods
 for the display: `text`, `fill`, `clear`, `backlight` and `logo`.
 
 The board renders and the host says what to render. No pixels cross the wire,
 which is what makes a 320x480 panel usable over a serial link at all.
+
+## Hardware
+
+Built and verified on the diymore / Guition **JC3248W535**:
+
+| Part | Detail |
+| --- | --- |
+| MCU | ESP32-S3 **N16R8**: 16 MB flash, 8 MB octal PSRAM |
+| Display | 3.5", 320x480, **AXS15231B** controller on a 4-bit QSPI bus |
+| Touch | Capacitive, built into the same AXS15231B, read over I2C at `0x3B` |
+| Host link | Native USB (USB-CDC), 115200 baud; no USB-UART bridge chip |
+
+Pin map (fixed on the board):
+
+| Function | GPIO |
+| --- | --- |
+| QSPI CS / SCK | 45 / 47 |
+| QSPI D0 / D1 / D2 / D3 | 21 / 48 / 40 / 39 |
+| Backlight | 1 |
+| Touch SDA / SCL | 4 / 8 |
+| Touch INT / RST | 11 / 12 (I2C at 400 kHz) |
+
+Things that bite on this board:
+
+- **Initialise the display before touch.** The AXS15231B is one chip for both;
+  its QSPI init sequence also configures the touch side. Touch first and the
+  I2C address still ACKs, but every read comes back as zeros.
+- **Use the `320480_type1` init sequence.** Arduino_GFX 1.6.x defaults to
+  `axs15231b_180640_init_operations`, which is for a different panel. The
+  firmware selects `axs15231b_320480_type1_init_operations`
+  (`-DPANEL_INIT_TYPE=2` switches to `type2` if a board revision needs it).
+- **The full-screen canvas needs PSRAM.** 320x480 at 16 bpp does not fit in
+  internal RAM, so build with `PSRAM=opi`.
+
+### Building the firmware
+
+With `arduino-cli`, ESP32 Arduino core `esp32:esp32@3.3.12`, and the libraries
+**GFX Library for Arduino 1.6.8** and **ArduinoJson**:
+
+```bash
+arduino-cli compile --fqbn \
+  'esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB' \
+  s3panel
+```
+
+All four FQBN options matter: `CDCOnBoot=cdc` puts the serial console on the
+native USB port this extension talks to. Arduino_GFX 1.5.x does not compile
+against core 3.3.x, and 1.6.x renamed the colour constants to `RGB565_*`.
 
 ## Why not just use `send`
 
@@ -35,6 +83,12 @@ swamp model create @vcjdeboer/s3-panel panel
 
 Set `holder: true` and pin `device` if more than one board is attached. All
 global arguments are the same as `s3-device`; see its README.
+
+**The port name is not stable.** macOS names the node after the physical USB
+socket (`/dev/cu.usbmodem1101`, `/dev/cu.usbmodem2101`, …), and on Linux it is
+`/dev/ttyACM*` in plug-in order. After replugging, run
+`swamp model method run panel detect` and update the pinned `device` if it
+moved; a stale value either fails to open or talks to a different board.
 
 ## Screen methods
 
@@ -98,8 +152,9 @@ Answer one JSON object per command line. The commands this type sends:
 A reply with `"ok":false` is recorded as `outcome=error` and then thrown, with
 the board's own `error` string in the message.
 
-The reference firmware is in the `esp32` repo under `firmware-s3/s3panel/`,
-written for the Guition JC3248W535.
+The reference firmware, `s3panel`, is written for the JC3248W535 (see
+[Hardware](#hardware)). It is not published yet; any firmware answering the
+commands above will do.
 
 ## Relationship to `@vcjdeboer/esp32-s3`
 

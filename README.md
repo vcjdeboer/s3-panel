@@ -3,7 +3,8 @@
 Drive an ESP32-S3 **with a screen** from [swamp](https://github.com/swamp-club/swamp).
 Built for the **Guition JC3248W535** (also sold under the diymore brand): an
 ESP32-S3 N16R8 with a 3.5" 320x480 capacitive touch display. See
-[Hardware](#hardware) for the pin map and firmware build.
+[Hardware](#hardware) for the pin map, and [`firmware/s3panel`](firmware/s3panel/s3panel.ino)
+for the firmware that runs on it.
 
 ![Swamp Club logo on the JC3248W535 panel](logo-on-screen.jpg)
 
@@ -49,16 +50,33 @@ Things that bite on this board:
 - **The full-screen canvas needs PSRAM.** 320x480 at 16 bpp does not fit in
   internal RAM, so build with `PSRAM=opi`.
 
-### Building the firmware
+### Firmware
 
-With `arduino-cli`, ESP32 Arduino core `esp32:esp32@3.3.12`, and the libraries
-**GFX Library for Arduino 1.6.8** and **ArduinoJson**:
+The firmware is in this repo: [`firmware/s3panel/s3panel.ino`](firmware/s3panel/s3panel.ino)
+(`s3panel 0.10`; `ping` reports the version). It implements every command in
+the [firmware contract](#firmware-contract), plus touch, tap events and the logo.
+
+It needs `arduino-cli` with the ESP32 Arduino core `esp32:esp32@3.3.12` and the
+libraries **GFX Library for Arduino 1.6.8** and **ArduinoJson**:
 
 ```bash
-arduino-cli compile --fqbn \
-  'esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB' \
-  s3panel
+arduino-cli core install esp32:esp32@3.3.12 \
+  --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli lib install "GFX Library for Arduino@1.6.8" ArduinoJson
 ```
+
+Flash it through the model, which compiles, uploads, releases and re-takes the
+port, and records the build output:
+
+```bash
+swamp model method run panel flash \
+  --input sketchPath=firmware/s3panel \
+  --input 'fqbn=esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB'
+swamp model method run panel ping    # {"ok":true,"fw":"s3panel 0.10"}
+```
+
+Or by hand with `arduino-cli compile --upload -p <port> --fqbn <same fqbn>
+firmware/s3panel`.
 
 All four FQBN options matter: `CDCOnBoot=cdc` puts the serial console on the
 native USB port this extension talks to. Arduino_GFX 1.5.x does not compile
@@ -156,9 +174,9 @@ Answer one JSON object per command line. The commands this type sends:
 A reply with `"ok":false` is recorded as `outcome=error` and then thrown, with
 the board's own `error` string in the message.
 
-The reference firmware, `s3panel`, is written for the JC3248W535 (see
-[Hardware](#hardware)). It is not published yet; any firmware answering the
-commands above will do.
+The reference firmware, [`firmware/s3panel`](firmware/s3panel/s3panel.ino), is
+written for the JC3248W535 (see [Hardware](#hardware)); any firmware answering
+the commands above will do.
 
 ## Relationship to `@vcjdeboer/esp32-s3`
 

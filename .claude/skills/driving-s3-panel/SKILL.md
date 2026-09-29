@@ -23,7 +23,8 @@ the wrong owner of the port, or the panel busy waiting for a tap.
    model at a time.
 4. **Start `approve` in the background, then let it finish the job.** It
    approves or rejects the waiting run and resumes it itself. Never follow a
-   panel tap with your own `swamp workflow approve|reject`.
+   panel tap with your own `swamp workflow approve|reject`. To stop a waiting
+   `approve` or `zonewait`, use `swamp model cancel panel`, not a kill.
 5. **Change extension code in its source repo**, never in
    `.swamp/pulled-extensions/`. A pull overwrites that copy and nobody else
    gets the change.
@@ -39,6 +40,7 @@ the wrong owner of the port, or the panel busy waiting for a tap.
 | Any firmware command, reply recorded | `swamp model method run panel send --input line=status` |
 | Flash | `git clone https://github.com/vcjdeboer/s3-panel`, then `swamp model method run panel flash --input sketchPath=<clone>/firmware/s3panel` |
 | Answer an approval on the panel | `swamp model method run panel approve --input workflow=<wf> --input step=<step>` (background) |
+| Stop a waiting `approve` / `zonewait` | `swamp model cancel panel` (ends within ~2 s, records `cancelled`) |
 | What is waiting for approval | `swamp workflow approvals --json` |
 | What a run did | `swamp workflow history get <run-id> --json` |
 
@@ -50,9 +52,9 @@ the wrong owner of the port, or the panel busy waiting for a tap.
 | `several serial devices found (...)` | Auto-detect with two boards attached | Unplug the other board, `detect`: the remaining port is the S3. Pin it, replug the other |
 | `no serial device found` | Nothing plugged in, or a charge-only cable | Replug with a data cable, then `detect` |
 | `write` fine, `read` empty | No holder: the port closed before the reply | Use `send` (write and wait), or `holder: true` + `hold` |
-| Commands time out right after an `approve`/`zonewait` | Firmware is inside `screen wait` and ignores serial | Tap the panel, wait out `waitMs`, or replug |
+| `lock_timeout` (exit 75) while `approve`/`zonewait` runs | That method holds the model | `swamp model cancel panel`, or wait for the tap |
 | Parallel calls time out | Per-model lock | One call at a time, or one fan-out method |
-| `flash` fails at upload | Another holder or monitor owns the port; port moved; panel still in `screen wait` | `release` every model on that port, close monitors, `detect`, tap or replug |
+| `flash` fails at upload | Another holder or monitor owns the port; port moved | `release` every model on that port, close monitors, `detect` |
 | Touch always `x=0,y=0` | Touch initialised before the display | Display init first in `setup()` |
 | Panel shows NOT RECORDED | swamp refused the decision (run no longer waiting) | Check `approval-latest.resolveError` |
 

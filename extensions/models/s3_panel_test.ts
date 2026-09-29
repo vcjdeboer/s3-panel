@@ -28,6 +28,7 @@ import {
   resolveApproval,
   type SwampRunner,
   swampBinary,
+  waitForTap,
 } from "./s3_panel.ts";
 
 Deno.test("the model type and version are well formed", () => {
@@ -188,4 +189,53 @@ Deno.test("swamp JSON is found among log lines", () => {
 Deno.test("an explicit swamp path wins; plain deno falls back to PATH", () => {
   assertEquals(swampBinary("/opt/swamp"), "/opt/swamp");
   assertEquals(swampBinary(), "swamp");
+});
+
+// ── waiting for a tap ────────────────────────────────────────────────────────
+
+/** A fake board: answers each `screen wait` from a script, records the lines. */
+function fakeBoard(replies: (Record<string, unknown> | null)[]) {
+  const lines: string[] = [];
+  const send = (line: string, _timeoutMs: number) => {
+    lines.push(line);
+    const r = replies.shift();
+    return Promise.resolve(r === undefined ? { ok: true, timeout: true } : r);
+  };
+  return { send, lines };
+}
+
+Deno.test("a tap ends the wait with the zone that was hit", async () => {
+  const { send } = fakeBoard([{ ok: true, timeout: true }, { ok: true, id: "go", x: 5, y: 9 }]);
+  assertEquals(await waitForTap(send, 60_000), { ended: "tap", id: "go", x: 5, y: 9 });
+});
+
+Deno.test("the board is never asked to wait longer than one slice", async () => {
+  const { send, lines } = fakeBoard([]);
+  const w = await waitForTap(send, 50, undefined, 20);
+  assertEquals(w.ended, "timeout");
+  for (const l of lines) {
+    assert(Number(l.split(" ")[2]) <= 20, `${l} exceeds the slice`);
+  }
+});
+
+Deno.test("swamp model cancel (the abort signal) ends the wait between slices", async () => {
+  const ac = new AbortController();
+  let calls = 0;
+  const send = () => {
+    if (++calls === 2) ac.abort();
+    return Promise.resolve({ ok: true, timeout: true } as Record<string, unknown>);
+  };
+  const w = await waitForTap(send, 60_000, ac.signal);
+  assertEquals(w.ended, "cancelled");
+  assertEquals(calls, 2);
+});
+
+Deno.test("serial input on the board aborts the wait", async () => {
+  const { send } = fakeBoard([{ ok: true, aborted: true }]);
+  assertEquals((await waitForTap(send, 60_000)).ended, "aborted");
+});
+
+Deno.test("a lost link is reported, not waited out", async () => {
+  const { send } = fakeBoard([null]);
+  assertEquals((await waitForTap(send, 60_000)).ended, "no-reply");
 });

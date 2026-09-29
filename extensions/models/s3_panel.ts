@@ -105,6 +105,9 @@ const ZoneSchema = z.object({
   x: z.number(),
   y: z.number(),
   timeout: z.boolean(),
+  ended: z.string().describe(
+    "tap, timeout, cancelled (swamp model cancel), aborted (serial input) or no-reply",
+  ),
   outcome: OUTCOME_FIELD,
   observedAt: z.string(),
   elapsedMs: z.number(),
@@ -118,7 +121,7 @@ const ApprovalSchema = z.object({
   ),
   prompt: z.string(),
   decision: z.string().describe(
-    "approved, rejected, timeout (no tap in time) or no-reply (link lost)",
+    "approved, rejected, timeout (no tap in time), cancelled (swamp model cancel), aborted (serial input) or no-reply (link lost)",
   ),
   source: z.string().describe(
     "Where the decision came from; always panel for this method",
@@ -247,6 +250,65 @@ function splitPrompt(text: string, maxChars = 25): string[] {
   }
   if (current) lines.push(current);
   return lines;
+}
+
+// ── waiting for a tap ────────────────────────────────────────────────────────
+
+/** How long one `screen wait` may block the board before the host checks in. */
+export const WAIT_SLICE_MS = 2000;
+
+/** How a wait for a tap ended. */
+export interface TapWait {
+  ended: "tap" | "timeout" | "cancelled" | "aborted" | "no-reply";
+  id: string;
+  x: number;
+  y: number;
+}
+
+/**
+ * Wait for a zone tap in short `screen wait` slices rather than one long one.
+ * The firmware ignores the host while it waits, so slicing is what lets
+ * `swamp model cancel` (the method's abort signal) end the wait within a
+ * slice, and bounds how long a killed process can leave the board deaf.
+ */
+export async function waitForTap(
+  send: (
+    line: string,
+    timeoutMs: number,
+  ) => Promise<Record<string, unknown> | null>,
+  totalMs: number,
+  signal?: AbortSignal,
+  sliceMs = WAIT_SLICE_MS,
+): Promise<TapWait> {
+  const none = { id: "", x: 0, y: 0 };
+  const t0 = Date.now();
+  while (true) {
+    if (signal?.aborted) return { ended: "cancelled", ...none };
+    const left = totalMs - (Date.now() - t0);
+    if (left <= 0) return { ended: "timeout", ...none };
+    const slice = Math.min(sliceMs, left);
+    const r = await send(`screen wait ${slice}`, slice + 2000);
+    if (!r) return { ended: "no-reply", ...none };
+    if (r.aborted) return { ended: "aborted", ...none };
+    if (r.timeout) continue;
+    return {
+      ended: "tap",
+      id: String(r.id ?? ""),
+      x: Number(r.x ?? 0),
+      y: Number(r.y ?? 0),
+    };
+  }
+}
+
+/** The method context's abort signal, set by `swamp model cancel`. */
+function abortSignal(ctx: MethodContext): AbortSignal | undefined {
+  return (ctx as MethodContext & { signal?: AbortSignal }).signal;
+}
+
+/** `waitForTap`'s sender, bound to a method context. */
+function lineSender(ctx: MethodContext) {
+  return async (line: string, timeoutMs: number) =>
+    (await sendLine(ctx, line, timeoutMs)).response;
 }
 
 // ── workflow gate ────────────────────────────────────────────────────────────
@@ -396,7 +458,7 @@ export function spawnResume(bin: string, pending: PendingApproval): void {
 /** Model definition for an ESP32-S3 carrying a display. */
 export const model = {
   type: "@vcjdeboer/s3-panel",
-  version: "2026.09.29.3",
+  version: "2026.09.29.4",
   globalArguments: GlobalArgsSchema,
   upgrades: [
     {
@@ -420,6 +482,12 @@ export const model = {
       toVersion: "2026.09.29.3",
       description:
         "Bundles the driving-s3-panel skill; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.09.29.4",
+      description:
+        "approve/zonewait wait in slices and honour swamp model cancel; zone records how the wait ended; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -922,7 +990,7 @@ export const model = {
 
     zonewait: {
       description:
-        "Wait for a touch zone to be tapped on a rendered screen. Returns the zone id that was hit, or times out.",
+        "Wait for a touch zone to be tapped on a rendered screen. Returns the zone id that was hit, or times out. `swamp model cancel` ends the wait within a couple of seconds.",
       arguments: z.object({
         waitMs: z
           .number()
@@ -938,28 +1006,30 @@ export const model = {
         const timeoutMs = args.waitMs ?? 43_200_000;
         const t0 = performance.now();
 
-        const r = await sendLine(
-          ctx,
-          `screen wait ${timeoutMs}`,
-          timeoutMs + 2000,
+        const w = await waitForTap(
+          lineSender(ctx),
+          timeoutMs,
+          abortSignal(ctx),
         );
-        const timedOut = !!(r.response?.timeout);
-        const outcome = !r.response ? "timeout" : timedOut ? "timeout" : "ok";
+        const outcome = w.ended === "no-reply"
+          ? "error"
+          : w.ended === "timeout"
+          ? "timeout"
+          : "ok";
 
         const handle = await ctx.writeResource("zone", "zone-latest", {
-          id: (r.response?.id as string) ?? "",
-          x: (r.response?.x as number) ?? 0,
-          y: (r.response?.y as number) ?? 0,
-          timeout: timedOut,
+          id: w.id,
+          x: w.x,
+          y: w.y,
+          timeout: w.ended === "timeout",
+          ended: w.ended,
           outcome,
           observedAt: new Date().toISOString(),
           elapsedMs: Math.round(performance.now() - t0),
         });
 
-        if (!r.response) {
-          throw new Error(
-            `no reply to screen wait within ${timeoutMs} ms`,
-          );
+        if (w.ended === "no-reply") {
+          throw new Error("no reply to screen wait; is the board connected?");
         }
         return { dataHandles: [handle] };
       },
@@ -1084,19 +1154,17 @@ export const model = {
           throw new Error("screen show failed");
         }
 
-        const r = await sendLine(
-          ctx,
-          `screen wait ${timeoutMs}`,
-          timeoutMs + 2000,
+        const w = await waitForTap(
+          lineSender(ctx),
+          timeoutMs,
+          abortSignal(ctx),
         );
-        const timedOut = !!(r.response?.timeout);
-        const zoneId = (r.response?.id as string) ?? "";
+        const zoneId = w.id;
 
         let decision: string;
-        if (!r.response) {
-          decision = "no-reply";
-        } else if (timedOut) {
-          decision = "timeout";
+        if (w.ended !== "tap") {
+          // timeout, cancelled, aborted or no-reply: nobody decided anything.
+          decision = w.ended;
         } else if (zoneId === "approve") {
           decision = "approved";
         } else if (zoneId === "reject") {
@@ -1139,42 +1207,46 @@ export const model = {
           }
         }
 
-        // Confirm only what swamp accepted: a refused decision is not shown
-        // as if it had counted.
-        const shown = resolveError ? "not recorded" : decision;
-        const confirmColor = resolveError
-          ? "yellow"
-          : decision === "approved"
-          ? "cyan"
-          : decision === "rejected"
-          ? "pink"
-          : "yellow";
-        await sendLine(ctx, "screen clear", cmdTimeout);
-        await sendLine(
-          ctx,
-          `screen add ${
-            JSON.stringify({
-              type: "gap",
-              h: 40,
-            })
-          }`,
-          cmdTimeout,
-        );
-        await sendLine(
-          ctx,
-          `screen add ${
-            JSON.stringify({
-              type: "label",
-              text: shown.toUpperCase(),
-              size: 3,
-              color: confirmColor,
-              align: "center",
-            })
-          }`,
-          cmdTimeout,
-        );
-        await sendLine(ctx, "screen show", cmdTimeout);
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        // A cancelled wait must finish fast: swamp kills the process shortly
+        // after `swamp model cancel`. Skip the banner, just go back to idle.
+        if (w.ended !== "cancelled") {
+          // Confirm only what swamp accepted: a refused decision is not shown
+          // as if it had counted.
+          const shown = resolveError ? "not recorded" : decision;
+          const confirmColor = resolveError
+            ? "yellow"
+            : decision === "approved"
+            ? "cyan"
+            : decision === "rejected"
+            ? "pink"
+            : "yellow";
+          await sendLine(ctx, "screen clear", cmdTimeout);
+          await sendLine(
+            ctx,
+            `screen add ${
+              JSON.stringify({
+                type: "gap",
+                h: 40,
+              })
+            }`,
+            cmdTimeout,
+          );
+          await sendLine(
+            ctx,
+            `screen add ${
+              JSON.stringify({
+                type: "label",
+                text: shown.toUpperCase(),
+                size: 3,
+                color: confirmColor,
+                align: "center",
+              })
+            }`,
+            cmdTimeout,
+          );
+          await sendLine(ctx, "screen show", cmdTimeout);
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
         await sendLine(ctx, "logo", cmdTimeout);
 
         // Last thing that touches swamp before returning, so the resumed steps
@@ -1207,19 +1279,17 @@ export const model = {
             resolveError,
             resumed,
             decidedAt,
-            outcome: !r.response
+            outcome: w.ended === "no-reply" || resolveError
               ? "error"
-              : timedOut
+              : w.ended === "timeout"
               ? "timeout"
-              : resolveError
-              ? "error"
               : "ok",
             elapsedMs: Math.round(performance.now() - t0),
           },
         );
 
-        if (!r.response) {
-          throw new Error(`no reply to screen wait within ${timeoutMs} ms`);
+        if (w.ended === "no-reply") {
+          throw new Error("no reply to screen wait; is the board connected?");
         }
         if (resolveError) {
           throw new Error(`panel said ${decision}; ${resolveError}`);

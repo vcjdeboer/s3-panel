@@ -30,7 +30,8 @@ swamp model method run panel approve --input workflow=<wf> --input step=<step>
 4. After an approve, starts `swamp workflow resume` detached, last, so resumed
    steps that use the same panel are not blocked.
 5. Writes `approval-latest`: `workflow`, `step`, `runId`, `prompt`, `decision`
-   (`approved`, `rejected`, `timeout`, `no-reply`), `source: panel`,
+   (`approved`, `rejected`, `timeout`, `cancelled`, `aborted`, `no-reply`),
+   `source: panel`,
    `resolved`, `resolveError`, `resumed`, `decidedAt`.
 
 `resumed: true` means the resume was started (detached, output discarded),
@@ -49,12 +50,13 @@ A timeout, lost link or stray tap resolves nothing; the run stays suspended.
    `swamp data get panel approval-latest --json` and report `decision`,
    `resolved`, `resumed`, `resolveError`. Confirm with
    `swamp workflow history get <run-id> --json`. Run nothing else.
-5. **User answers in the terminal instead:** stop the background task, then
-   `swamp workflow approve|reject <wf> <step> --run <id> --reason "terminal"`,
-   and `swamp workflow resume <wf> --run <id>` after an approve. The panel still
-   shows the approve screen and ignores commands (see `screen wait` in
-   `serial-and-holder.md`). Tell the user to tap either button or replug to
-   clear it; that tap changes nothing in swamp because the method is gone.
+5. **User answers in the terminal instead:** `swamp model cancel panel`. The
+   background `approve` ends within about 2 s, records `decision: cancelled`
+   (resolving nothing) and puts the panel back on the logo. Then
+   `swamp workflow approve|reject <wf> <step> --run <id>`, and
+   `swamp workflow resume <wf> --run <id>` after an approve. Do not kill the
+   background task instead: that skips the record and leaves the approve screen
+   up.
 
 The decision passed to swamp must always be the one tapped or typed. Never
 hardcode a verb, and never chain an approve after reading a panel result.

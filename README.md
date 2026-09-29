@@ -53,7 +53,7 @@ Things that bite on this board:
 ### Firmware
 
 The firmware is in this repo: [`firmware/s3panel/s3panel.ino`](firmware/s3panel/s3panel.ino)
-(`s3panel 0.10`; `ping` reports the version). It implements every command in
+(`s3panel 0.11`; `ping` reports the version). It implements every command in
 the [firmware contract](#firmware-contract), plus touch, tap events and the logo.
 
 It needs `arduino-cli` with the ESP32 Arduino core `esp32:esp32@3.3.12` and the
@@ -71,7 +71,7 @@ uploads, releases and re-takes the port, and records the build output:
 ```bash
 git clone https://github.com/vcjdeboer/s3-panel
 swamp model method run panel flash --input sketchPath=s3-panel/firmware/s3panel
-swamp model method run panel ping    # {"ok":true,"fw":"s3panel 0.10"}
+swamp model method run panel ping    # {"ok":true,"fw":"s3panel 0.11"}
 ```
 
 The model's
@@ -138,7 +138,7 @@ Each writes a `draw-latest` record carrying the command sent, the board's reply,
 | Method | Arguments | Notes |
 | --- | --- | --- |
 | `screen` | `elements` (array), `timeoutMs` | Pushes a layout: `label`, `button` (with an `id`, which makes it a touch zone) and `gap` elements, stacked below a mini logo. Writes `screen-latest`. |
-| `zonewait` | `waitMs` (default 12 h) | Blocks until a button is tapped and writes `zone-latest` with its `id`, or a timeout. |
+| `zonewait` | `waitMs` (default 12 h) | Blocks until a button is tapped and writes `zone-latest` with its `id` and how the wait `ended` (`tap`, `timeout`, `cancelled`, `aborted`, `no-reply`). `swamp model cancel panel` ends it within about 2 s. |
 | `approve` | `workflow`, `step`, optional `prompt`, `run`, `resolve`, `resume`, `waitMs` | Answers a suspended `manual_approval` step from the panel, end to end. See below. |
 
 ### Approving a workflow step from the panel
@@ -159,6 +159,15 @@ it. `approve` lets that someone be a finger on the panel:
 
 A timeout, a lost serial link or a stray tap resolves nothing: the run stays
 suspended. If swamp refuses the decision the method fails and says so.
+
+To take the question off the panel (for example because it was answered in the
+terminal), run `swamp model cancel panel`: `approve` waits for a tap in
+2-second slices, so it ends within about 2 s, records `decision: cancelled`,
+resolves nothing and returns the panel to the logo.
+
+The tap itself is acknowledged by the firmware: `approve` and `reject` buttons
+flash a full-screen APPROVED / REJECTED banner; buttons in other `screen`
+layouts are outlined in white (firmware 0.11).
 
 Verified end to end on a JC3248W535: a REJECT tap failed the waiting run with
 the panel reason, and an APPROVE tap approved it and the detached resume
@@ -208,7 +217,7 @@ Answer one JSON object per command line. The commands this type sends:
 | `screen clear` | `{"ok":true}` |
 | `screen add {"type":"button","id":"approve","text":"APPROVE"}` | `{"ok":true,"index":6}` |
 | `screen show` | `{"ok":true,"elements":7,"zones":2}` |
-| `screen wait 60000` | `{"ok":true,"id":"approve","x":160,"y":400}` on a tap, `{"ok":true,"timeout":true}` otherwise |
+| `screen wait 2000` | `{"ok":true,"id":"approve","x":160,"y":400}` on a tap, `{"ok":true,"timeout":true}` on expiry, `{"ok":true,"aborted":true}` if a serial line arrives first (that line is consumed, not run) |
 
 A reply with `"ok":false` is recorded as `outcome=error` and then thrown, with
 the board's own `error` string in the message.

@@ -5,7 +5,7 @@
 // USB serial, one command per line in, one JSON object per line out, so the
 // host never has to push pixels. Driven from swamp by @vcjdeboer/s3-panel.
 //
-//   ping              -> {"ok":true,"fw":"s3panel 0.10"}
+//   ping              -> {"ok":true,"fw":"s3panel 0.11"}
 //   status            -> {"ok":true,"display":bool,"w":320,"h":480,"psram":N,
 //                          "backlight":bool,"touch":bool}
 //   text <msg>        -> {"ok":true,"lines":N}    ('|' splits lines, drawn top-down)
@@ -20,7 +20,8 @@
 //                        timestamp. count=0 means no touch since last clear.
 //   touchclear        -> {"ok":true,"cleared":N}  resets count to 0
 //   waittouch [ms]    -> blocks until a touch, returns {"ok":true,...} or
-//                        {"ok":true,"points":0,"timeout":true} on expiry
+//                        {"ok":true,"points":0,"timeout":true} on expiry, or
+//                        {"ok":true,"points":0,"aborted":true} on serial input
 //   simtouch X Y      -> fake a touch at (X,Y): sets latch as if touched
 //   touchgame         -> {"ok":true,"game":"started"}  tap counter game
 //   events on|off     -> {"ok":true,"events":bool}  unsolicited tap events
@@ -34,7 +35,11 @@
 //                        below a mini logo
 //   screen wait [ms]  -> blocks until a zone is tapped:
 //                        {"ok":true,"id":"...","x":X,"y":Y}, or
-//                        {"ok":true,"timeout":true} on expiry (default 300000)
+//                        {"ok":true,"timeout":true} on expiry (default 300000),
+//                        or {"ok":true,"aborted":true} when a serial line
+//                        arrives first (the line is consumed, not run).
+//                        A tapped "approve"/"reject" zone flashes APPROVED /
+//                        REJECTED; any other zone is outlined in white.
 //   anything else     -> {"ok":false,"error":"..."}
 //
 // Panel pin map, QSPI (verified for this board): CS 45, SCK 47, D0 21, D1 48,
@@ -49,7 +54,7 @@
 #include <ArduinoJson.h>
 #include <Wire.h>
 
-#define FW "s3panel 0.10"
+#define FW "s3panel 0.11"
 #define TOUCH_ADDR 0x3B
 #define TOUCH_SDA 4
 #define TOUCH_SCL 8
@@ -543,11 +548,30 @@ static void screenShow() {
   gfx->flush();
 }
 
+// A blocking wait must not deafen the board: any line arriving on serial ends
+// it. The line is read and discarded so it cannot be answered twice.
+static bool serialInterrupt() {
+  if (!Serial.available()) return false;
+  unsigned long t0 = millis();
+  while (millis() - t0 < 200) {
+    if (Serial.available()) {
+      if (Serial.read() == '\n') break;
+    } else {
+      delay(1);
+    }
+  }
+  return true;
+}
+
 static void screenWait(unsigned long timeoutMs) {
   unsigned long start = millis();
   bool prevTouch = false;
 
   while (millis() - start < timeoutMs) {
+    if (serialInterrupt()) {
+      Serial.println("{\"ok\":true,\"aborted\":true}");
+      return;
+    }
     int tx, ty, gesture;
     bool touching = readTouch(&tx, &ty, &gesture);
     if (touching && !prevTouch) {
@@ -555,15 +579,26 @@ static void screenWait(unsigned long timeoutMs) {
         TouchZone &z = touchZones[i];
         if (tx >= z.x && tx < z.x + z.w && ty >= z.y && ty < z.y + z.h) {
           bool isReject = (strcmp(z.id, "reject") == 0);
-          uint16_t hiColor = isReject ? PINK_TXT : CYAN_TXT;
-          const char *label = isReject ? "REJECTED" : "APPROVED";
-          gfx->fillScreen(RGB565_BLACK);
-          gfx->fillRect(0, 180, 320, 80, hiColor);
-          gfx->setTextSize(3);
-          gfx->setTextColor(RGB565_BLACK);
-          int tw = strlen(label) * 18;
-          gfx->setCursor((320 - tw) / 2, 200);
-          gfx->print(label);
+          bool isApprove = (strcmp(z.id, "approve") == 0);
+          if (isReject || isApprove) {
+            // A decision gets a full-screen banner the moment it is tapped.
+            uint16_t hiColor = isReject ? PINK_TXT : CYAN_TXT;
+            const char *label = isReject ? "REJECTED" : "APPROVED";
+            gfx->fillScreen(RGB565_BLACK);
+            gfx->fillRect(0, 180, 320, 80, hiColor);
+            gfx->setTextSize(3);
+            gfx->setTextColor(RGB565_BLACK);
+            int tw = strlen(label) * 18;
+            gfx->setCursor((320 - tw) / 2, 200);
+            gfx->print(label);
+          } else {
+            // Any other zone just shows it was hit; the host decides what
+            // the tap means and draws the next screen.
+            for (int t = 0; t < 4; t++) {
+              gfx->drawRect(z.x - t, z.y - t, z.w + 2 * t, z.h + 2 * t,
+                            RGB565_WHITE);
+            }
+          }
           gfx->flush();
           Serial.printf("{\"ok\":true,\"id\":\"%s\",\"x\":%d,\"y\":%d}\n",
                         z.id, tx, ty);
@@ -694,6 +729,10 @@ static void handle(const String &lineIn) {
     if (timeout <= 0) timeout = 30000;
     unsigned long start = millis();
     while (millis() - start < timeout) {
+      if (serialInterrupt()) {
+        Serial.println("{\"ok\":true,\"points\":0,\"aborted\":true}");
+        return;
+      }
       int tx, ty, gesture;
       if (readTouch(&tx, &ty, &gesture)) {
         latchTouch(tx, ty);

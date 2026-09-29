@@ -39,9 +39,12 @@ A serial port has exactly one owner at a time.
 
 ## Locks
 
-swamp runs one method per model at a time. Separate `swamp model method run`
-calls against the same model contend on that lock and time out when one runs
-long (`approve` and `zonewait` can run for hours). Prefer one call that does the
+swamp runs one method per model at a time. While one runs, another
+`swamp model method run` on the same model fails with `lock_timeout` (exit 75);
+`approve` and `zonewait` can hold it for hours. `swamp model cancel <model>`
+ends a running method: swamp signals it, then kills it about 3 s later, so
+long-running methods must check the signal often (these two do, between
+2-second wait slices). Prefer one call that does the
 whole job, or a swamp workflow, over parallel loops. `touchstate` is latched
 (count since `touchclear`), so it does not need polling every second.
 
@@ -61,12 +64,13 @@ One command line in, one JSON object line out.
 - `screen clear` / `screen add <json>` / `screen show` / `screen wait <ms>`
   build a touch layout (`label`, `button` with an `id`, `gap`).
 
-**On a tap, the firmware draws its own full-screen banner** before replying:
-REJECTED (pink) for a zone with id `reject`, APPROVED (cyan) for **any other
-id**. Fine for `approve`; misleading for other layouts, where every tap reads
-as APPROVED until the host draws the next screen.
+**Tap feedback is drawn by the firmware** before it replies: a zone with id
+`approve` or `reject` flashes a full-screen APPROVED (cyan) / REJECTED (pink)
+banner; any other zone is outlined in white and the screen stays until the host
+draws the next one. (Firmware before 0.11 showed APPROVED for every id.)
 
-**`screen wait` blocks the firmware.** Until a zone is tapped or the timeout
-passes, the board polls touch only and ignores serial: any command sent
-meanwhile gets no reply. `approve` and `zonewait` use it. Keep `waitMs` to what
-the situation needs.
+**While `screen wait` or `waittouch` runs, the board only watches touch.** From
+firmware 0.11 any serial line ends the wait: the line is consumed (not run) and
+the wait answers `{"ok":true,"aborted":true}`. The host methods never ask for
+more than 2 s per `screen wait`, so a killed process leaves the board busy for
+at most one slice.

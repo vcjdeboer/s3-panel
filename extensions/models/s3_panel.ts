@@ -111,9 +111,21 @@ const ZoneSchema = z.object({
 const ApprovalSchema = z.object({
   workflow: z.string(),
   step: z.string(),
+  runId: z.string().describe(
+    "The suspended workflow run this tap answered; empty when not resolving",
+  ),
   prompt: z.string(),
-  decision: z.string(),
+  decision: z.string().describe(
+    "approved, rejected, timeout (no tap in time) or no-reply (link lost)",
+  ),
   source: z.string().describe("Where the decision came from: panel or prompt"),
+  resolved: z.boolean().describe(
+    "True when swamp accepted the approve/reject for runId",
+  ),
+  resolveError: z.string().describe("swamp's error when resolving failed"),
+  resumed: z.boolean().describe(
+    "True when `swamp workflow resume` was started for an approved run",
+  ),
   decidedAt: z.string(),
   outcome: OUTCOME_FIELD,
   elapsedMs: z.number(),
@@ -233,16 +245,166 @@ function splitPrompt(text: string, maxChars = 25): string[] {
   return lines;
 }
 
+// ── workflow gate ────────────────────────────────────────────────────────────
+//
+// `approve` closes the loop with a suspended `manual_approval` step itself, so
+// nothing sits between the tap and swamp that could relay the wrong decision.
+// It talks to swamp through its own CLI: inside a swamp model `Deno.execPath()`
+// is the swamp binary, and the child inherits the repo cwd and SWAMP_REPO_DIR.
+
+/** Result of one swamp CLI call. */
+export interface SwampResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** Runs the swamp CLI with the given arguments. Injectable for tests. */
+export type SwampRunner = (args: string[]) => Promise<SwampResult>;
+
+/** A suspended manual_approval step, as `swamp workflow approvals` lists it. */
+export interface PendingApproval {
+  workflowName: string;
+  runId: string;
+  stepName: string;
+  prompt: string;
+}
+
+/**
+ * The swamp binary to call back into. An explicit path wins; otherwise the
+ * running binary when it is swamp (the normal case inside a model method),
+ * else `swamp` on PATH (unit tests, which run under plain deno).
+ */
+export function swampBinary(explicit?: string): string {
+  if (explicit) return explicit;
+  const self = Deno.execPath();
+  const base = self.split(/[\\/]/).pop() ?? "";
+  return base.startsWith("swamp") ? self : "swamp";
+}
+
+/** A runner that executes the swamp CLI and captures its output. */
+export function cliRunner(bin: string): SwampRunner {
+  return async (args) => {
+    const out = await new Deno.Command(bin, {
+      args,
+      stdin: "null",
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    const dec = new TextDecoder();
+    return {
+      code: out.code,
+      stdout: stripEscapes(dec.decode(out.stdout)),
+      stderr: stripEscapes(dec.decode(out.stderr)),
+    };
+  };
+}
+
+/** Parse the JSON object a swamp `--json` call printed, ignoring log lines. */
+export function parseSwampJson(stdout: string): Record<string, unknown> {
+  const start = stdout.indexOf("{");
+  const end = stdout.lastIndexOf("}");
+  if (start < 0 || end < start) {
+    throw new Error(`swamp printed no JSON: ${stdout.slice(0, 200)}`);
+  }
+  return JSON.parse(stdout.slice(start, end + 1));
+}
+
+/**
+ * Find the one suspended run this approval answers. With `runId`, it must be
+ * pending for that workflow and step; without, exactly one run may match, since
+ * guessing between two would approve the wrong deploy.
+ */
+export async function findPendingApproval(
+  run: SwampRunner,
+  workflow: string,
+  step: string,
+  runId?: string,
+): Promise<PendingApproval> {
+  const r = await run(["workflow", "approvals", "--json"]);
+  if (r.code !== 0) {
+    throw new Error(`swamp workflow approvals failed: ${r.stderr || r.stdout}`);
+  }
+  const all = (parseSwampJson(r.stdout).approvals ?? []) as PendingApproval[];
+  const matches = all.filter((a) =>
+    a.workflowName === workflow && a.stepName === step &&
+    (!runId || a.runId === runId)
+  );
+  if (matches.length === 0) {
+    throw new Error(
+      `no suspended run of ${workflow} is waiting at step ${step}` +
+        (runId ? ` with run ${runId}` : "") +
+        "; start the workflow first, or pass resolve=false to only record a tap",
+    );
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `${matches.length} runs of ${workflow} are waiting at ${step}; pass run=<id> ` +
+        `to choose one: ${matches.map((m) => m.runId).join(", ")}`,
+    );
+  }
+  return matches[0];
+}
+
+/** Approve or reject the suspended step. Returns swamp's error text, if any. */
+export async function resolveApproval(
+  run: SwampRunner,
+  pending: PendingApproval,
+  decision: "approved" | "rejected",
+  reason: string,
+): Promise<string | undefined> {
+  const verb = decision === "approved" ? "approve" : "reject";
+  const r = await run([
+    "workflow",
+    verb,
+    pending.workflowName,
+    pending.stepName,
+    "--run",
+    pending.runId,
+    "--reason",
+    reason,
+    "--json",
+  ]);
+  return r.code === 0 ? undefined : (r.stderr || r.stdout).trim();
+}
+
+/**
+ * Start `swamp workflow resume` for an approved run without waiting for it.
+ * Detached on purpose: the resumed steps may use this same panel, and this
+ * method still holds the model while it runs.
+ */
+export function spawnResume(bin: string, pending: PendingApproval): void {
+  const child = new Deno.Command(bin, {
+    args: [
+      "workflow",
+      "resume",
+      pending.workflowName,
+      "--run",
+      pending.runId,
+    ],
+    stdin: "null",
+    stdout: "null",
+    stderr: "null",
+  }).spawn();
+  child.unref();
+}
+
 /** Model definition for an ESP32-S3 carrying a display. */
 export const model = {
   type: "@vcjdeboer/s3-panel",
-  version: "2026.09.27.5",
+  version: "2026.09.29.1",
   globalArguments: GlobalArgsSchema,
   upgrades: [
     {
       toVersion: "2026.09.27.5",
       description:
         "Adds screen, zonewait and approve; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.09.29.1",
+      description:
+        "approve resolves the suspended manual_approval run itself; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -790,11 +952,25 @@ export const model = {
 
     approve: {
       description:
-        "Render a workflow approval on the panel and wait for a physical tap. Shows the workflow name, step, prompt, and APPROVE / REJECT buttons. Records the decision as an evidentiary data record.",
+        "Answer a suspended manual_approval step from the panel. Finds the waiting run, shows the workflow, step, prompt and APPROVE / REJECT buttons, waits for a physical tap, then approves (and resumes) or rejects that run in swamp itself. Records the decision and the run it answered as an evidentiary data record.",
       arguments: z.object({
         workflow: z.string().describe("Workflow name (shown on screen)"),
-        step: z.string().describe("Step name (shown on screen)"),
-        prompt: z.string().describe("Approval prompt text"),
+        step: z.string().describe("The manual_approval step name"),
+        prompt: z.string().optional().describe(
+          "Text to show; defaults to the step's own prompt",
+        ),
+        run: z.string().optional().describe(
+          "Run ID to answer; required only when several runs wait at this step",
+        ),
+        resolve: z.boolean().default(true).describe(
+          "Approve/reject the run in swamp after the tap (false: only record)",
+        ),
+        resume: z.boolean().default(true).describe(
+          "After approving, start `swamp workflow resume` for the run",
+        ),
+        swampPath: z.string().optional().describe(
+          "swamp binary to call back into; defaults to the running one",
+        ),
         waitMs: z
           .number()
           .int()
@@ -806,17 +982,31 @@ export const model = {
         args: {
           workflow: string;
           step: string;
-          prompt: string;
+          prompt?: string;
+          run?: string;
+          resolve?: boolean;
+          resume?: boolean;
+          swampPath?: string;
           waitMs?: number;
         },
         ctx: MethodContext,
       ) => {
         const timeoutMs = args.waitMs ?? 43_200_000;
+        const resolve = args.resolve ?? true;
         const g = ctx.globalArgs;
         const cmdTimeout = g.timeoutMs ?? 3000;
         const t0 = performance.now();
+        const bin = swampBinary(args.swampPath);
+        const swamp = cliRunner(bin);
 
-        const promptLines = splitPrompt(args.prompt);
+        // Find the run before drawing anything: a screen for an approval
+        // nobody is waiting on would record a decision that goes nowhere.
+        const pending = resolve
+          ? await findPendingApproval(swamp, args.workflow, args.step, args.run)
+          : undefined;
+        const prompt = args.prompt ?? pending?.prompt ?? "";
+
+        const promptLines = splitPrompt(prompt);
         const elements: Record<string, unknown>[] = [
           { type: "gap", h: 10 },
           {
@@ -888,7 +1078,9 @@ export const model = {
         const zoneId = (r.response?.id as string) ?? "";
 
         let decision: string;
-        if (timedOut || !r.response) {
+        if (!r.response) {
+          decision = "no-reply";
+        } else if (timedOut) {
           decision = "timeout";
         } else if (zoneId === "approve") {
           decision = "approved";
@@ -898,7 +1090,46 @@ export const model = {
           decision = "unknown";
         }
 
-        const confirmColor = decision === "approved"
+        const decidedAt = new Date().toISOString();
+
+        // Hand the decision to swamp exactly as tapped. A timeout, a lost link
+        // or a stray zone resolves nothing: the run stays suspended.
+        let resolved = false;
+        let resolveError = "";
+        let resumed = false;
+        if (
+          pending && (decision === "approved" || decision === "rejected")
+        ) {
+          const err = await resolveApproval(
+            swamp,
+            pending,
+            decision,
+            `${decision} on panel (${ctx.modelId})`,
+          );
+          resolved = err === undefined;
+          resolveError = err === undefined
+            ? ""
+            : `swamp refused the ${decision}: ${err}`;
+          if (resolved) {
+            ctx.logger.info(
+              "{decision} run {run} of {workflow} from the panel",
+              {
+                decision,
+                run: pending.runId,
+                workflow: pending.workflowName,
+              },
+            );
+          } else {
+            ctx.logger.warning("{err}", { err: resolveError });
+          }
+        }
+
+        // Confirm only what swamp accepted: a refused decision is not shown
+        // as if it had counted.
+        const shown = resolveError ? "not recorded" : decision;
+        const confirmColor = resolveError
+          ? "yellow"
+          : decision === "approved"
           ? "cyan"
           : decision === "rejected"
           ? "pink"
@@ -919,7 +1150,7 @@ export const model = {
           `screen add ${
             JSON.stringify({
               type: "label",
-              text: decision.toUpperCase(),
+              text: shown.toUpperCase(),
               size: 3,
               color: confirmColor,
               align: "center",
@@ -931,21 +1162,53 @@ export const model = {
         await new Promise((resolve) => setTimeout(resolve, 2000));
         await sendLine(ctx, "logo", cmdTimeout);
 
+        // Last thing that touches swamp before returning, so the resumed steps
+        // (which may use this same panel) wait only for the record below.
+        if (
+          pending && resolved && decision === "approved" &&
+          (args.resume ?? true)
+        ) {
+          try {
+            spawnResume(bin, pending);
+            resumed = true;
+          } catch (e) {
+            resolveError = `approved, but resume did not start: ${
+              (e as Error).message
+            }`;
+          }
+        }
+
         const handle = await ctx.writeResource(
           "approval",
           "approval-latest",
           {
             workflow: args.workflow,
             step: args.step,
-            prompt: args.prompt,
+            runId: pending?.runId ?? "",
+            prompt,
             decision,
             source: "panel",
-            decidedAt: new Date().toISOString(),
-            outcome: !r.response ? "timeout" : "ok",
+            resolved,
+            resolveError,
+            resumed,
+            decidedAt,
+            outcome: !r.response
+              ? "error"
+              : timedOut
+              ? "timeout"
+              : resolveError
+              ? "error"
+              : "ok",
             elapsedMs: Math.round(performance.now() - t0),
           },
         );
 
+        if (!r.response) {
+          throw new Error(`no reply to screen wait within ${timeoutMs} ms`);
+        }
+        if (resolveError) {
+          throw new Error(`panel said ${decision}; ${resolveError}`);
+        }
         return { dataHandles: [handle] };
       },
     },

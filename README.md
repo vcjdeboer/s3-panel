@@ -131,17 +131,44 @@ Each writes a `draw-latest` record carrying the command sent, the board's reply,
 | --- | --- | --- |
 | `screen` | `elements` (array), `timeoutMs` | Pushes a layout: `label`, `button` (with an `id`, which makes it a touch zone) and `gap` elements, stacked below a mini logo. Writes `screen-latest`. |
 | `zonewait` | `waitMs` (default 12 h) | Blocks until a button is tapped and writes `zone-latest` with its `id`, or a timeout. |
-| `approve` | `workflow`, `step`, `prompt`, `waitMs` | Renders APPROVE / REJECT for a workflow's `manual_approval` step, waits for a tap, flashes the decision, returns to the logo. Writes an evidentiary `approval-latest` record (`decision`, `source: panel`, `decidedAt`). |
+| `approve` | `workflow`, `step`, optional `prompt`, `run`, `resolve`, `resume`, `waitMs` | Answers a suspended `manual_approval` step from the panel, end to end. See below. |
 
-`approve` records the decision; it does not resume the workflow. Feed it to
-`swamp workflow approve` / `swamp workflow reject` yourself. It blocks until a
-tap, so run it in the background from an agent or script.
+### Approving a workflow step from the panel
+
+swamp's `manual_approval` step suspends a run until someone approves or rejects
+it. `approve` lets that someone be a finger on the panel:
+
+1. It looks up the suspended run with `swamp workflow approvals`. Nothing is
+   drawn if no run of `workflow` waits at `step`, and it refuses to guess when
+   several do: pass `run=<id>` to pick one.
+2. It shows the workflow, the step, the step's own prompt (or `prompt`) and
+   APPROVE / REJECT, and waits for a tap (`waitMs`, default 12 h).
+3. It hands the tap to swamp exactly as given: `swamp workflow approve` or
+   `swamp workflow reject` for that run, with `--run` and a reason naming the
+   panel. A reject ends the run as failed.
+4. After an approve it starts `swamp workflow resume` for the run, detached and
+   last, so resumed steps that use this same panel are not kept waiting.
+
+A timeout, a lost serial link or a stray tap resolves nothing: the run stays
+suspended. If swamp refuses the decision the method fails and says so.
 
 ```bash
-swamp model method run panel approve --input workflow=deploy \
-  --input step=approve-deploy --input 'prompt=Deploy firmware update to panel?'
+swamp workflow run deploy                   # suspends at the approve-deploy step
+swamp model method run panel approve \
+  --input workflow=deploy --input step=approve-deploy
 swamp data get panel approval-latest --json
 ```
+
+`approval-latest` is an evidentiary record of the tap: `workflow`, `step`,
+`runId`, `prompt`, `decision` (`approved`, `rejected`, `timeout`, `no-reply`),
+`source: panel`, `resolved`, `resolveError`, `resumed` and `decidedAt`. swamp
+keeps a reason only for rejections, so this record is where an approval's
+origin is written down.
+
+`resolve=false` only records the tap and leaves the run to you;
+`resume=false` approves without resuming. The method calls back into the swamp
+binary it runs under, in the same repository; `swampPath` overrides the binary.
+It blocks until a tap, so start it in the background from a script or agent.
 
 ## Use
 

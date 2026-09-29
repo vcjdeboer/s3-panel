@@ -13,8 +13,22 @@
  * @module
  */
 
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
-import { assertDrawable, model } from "./s3_panel.ts";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertThrows,
+} from "jsr:@std/assert@1";
+import {
+  assertDrawable,
+  findPendingApproval,
+  model,
+  parseSwampJson,
+  type PendingApproval,
+  resolveApproval,
+  type SwampRunner,
+  swampBinary,
+} from "./s3_panel.ts";
 
 Deno.test("the model type and version are well formed", () => {
   assertEquals(model.type, "@vcjdeboer/s3-panel");
@@ -102,4 +116,76 @@ Deno.test("ordinary text is allowed, including spaces and punctuation", () => {
   assertDrawable(["S3 PANEL", "ready: 3 of 3", "temp 23.4 C"]);
   // An empty line is a legitimate blank row, not an error.
   assertDrawable(["top", "", "bottom"]);
+});
+
+// ── workflow gate ────────────────────────────────────────────────────────────
+
+const WAITING: PendingApproval[] = [
+  { workflowName: "deploy", runId: "run-a", stepName: "gate", prompt: "Ship it?" },
+  { workflowName: "deploy", runId: "run-b", stepName: "other", prompt: "x" },
+  { workflowName: "backup", runId: "run-c", stepName: "gate", prompt: "y" },
+];
+
+/** A fake swamp CLI: records every call, answers approvals from a list. */
+function fakeSwamp(approvals: PendingApproval[], code = 0) {
+  const calls: string[][] = [];
+  const run: SwampRunner = (args) => {
+    calls.push(args);
+    const stdout = args[1] === "approvals"
+      ? `[INF] noise\n${JSON.stringify({ approvals })}\n`
+      : JSON.stringify({ ok: code === 0 });
+    return Promise.resolve({ code, stdout, stderr: code ? "refused" : "" });
+  };
+  return { run, calls };
+}
+
+Deno.test("the waiting run is found by workflow and step", async () => {
+  const { run } = fakeSwamp(WAITING);
+  const p = await findPendingApproval(run, "deploy", "gate");
+  assertEquals(p.runId, "run-a");
+  assertEquals(p.prompt, "Ship it?");
+});
+
+Deno.test("no waiting run is refused before anything is drawn", async () => {
+  const { run } = fakeSwamp(WAITING);
+  await assertRejects(() => findPendingApproval(run, "deploy", "nope"));
+});
+
+Deno.test("two waiting runs are refused unless a run id picks one", async () => {
+  const two = [...WAITING, { ...WAITING[0], runId: "run-z" }];
+  const { run } = fakeSwamp(two);
+  const err = await assertRejects(() => findPendingApproval(run, "deploy", "gate"));
+  assert((err as Error).message.includes("run-z"), "should list the candidates");
+  const p = await findPendingApproval(run, "deploy", "gate", "run-z");
+  assertEquals(p.runId, "run-z");
+});
+
+Deno.test("a run id that is not waiting at that step is refused", async () => {
+  const { run } = fakeSwamp(WAITING);
+  await assertRejects(() => findPendingApproval(run, "deploy", "gate", "run-c"));
+});
+
+Deno.test("a tapped decision becomes exactly that swamp verb for that run", async () => {
+  for (const [decision, verb] of [["approved", "approve"], ["rejected", "reject"]] as const) {
+    const { run, calls } = fakeSwamp(WAITING);
+    const err = await resolveApproval(run, WAITING[0], decision, "why");
+    assertEquals(err, undefined);
+    assertEquals(calls[0].slice(0, 6), ["workflow", verb, "deploy", "gate", "--run", "run-a"]);
+    assertEquals(calls[0].slice(6), ["--reason", "why", "--json"]);
+  }
+});
+
+Deno.test("swamp refusing the decision is reported, not swallowed", async () => {
+  const { run } = fakeSwamp(WAITING, 1);
+  assertEquals(await resolveApproval(run, WAITING[0], "approved", "why"), "refused");
+});
+
+Deno.test("swamp JSON is found among log lines", () => {
+  assertEquals(parseSwampJson('[INF] x\n{"a":1}\n').a, 1);
+  assertThrows(() => parseSwampJson("[INF] nothing"));
+});
+
+Deno.test("an explicit swamp path wins; plain deno falls back to PATH", () => {
+  assertEquals(swampBinary("/opt/swamp"), "/opt/swamp");
+  assertEquals(swampBinary(), "swamp");
 });

@@ -65,22 +65,30 @@ arduino-cli core install esp32:esp32@3.3.12 \
 arduino-cli lib install "GFX Library for Arduino@1.6.8" ArduinoJson
 ```
 
-Flash it through the model, which compiles, uploads, releases and re-takes the
-port, and records the build output:
+Clone this repo and flash the sketch through the model, which compiles,
+uploads, releases and re-takes the port, and records the build output:
 
 ```bash
-swamp model method run panel flash \
-  --input sketchPath=firmware/s3panel \
-  --input 'fqbn=esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB'
+git clone https://github.com/vcjdeboer/s3-panel
+swamp model method run panel flash --input sketchPath=s3-panel/firmware/s3panel
 swamp model method run panel ping    # {"ok":true,"fw":"s3panel 0.10"}
 ```
 
-Or by hand with `arduino-cli compile --upload -p <port> --fqbn <same fqbn>
-firmware/s3panel`.
-
-All four FQBN options matter: `CDCOnBoot=cdc` puts the serial console on the
+The model's
+`fqbn` global argument defaults to
+`esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB`;
+override it only for another board variant. All four options matter: `CDCOnBoot=cdc` puts the serial console on the
 native USB port this extension talks to. Arduino_GFX 1.5.x does not compile
 against core 3.3.x, and 1.6.x renamed the colour constants to `RGB565_*`.
+
+## Agent skill
+
+The extension ships a skill, `driving-s3-panel`, that `swamp extension pull`
+installs into `.claude/skills/`. It gives coding agents the operational
+knowledge the method tables don't: finding the port after a replug, who owns
+the port (the holder), the per-model lock, the panel ignoring serial while it
+waits for a tap, answering `manual_approval` steps from the panel, flashing, and
+changing and publishing the extension.
 
 ## Why not just use `send`
 

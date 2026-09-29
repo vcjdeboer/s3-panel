@@ -120,7 +120,9 @@ const ApprovalSchema = z.object({
   decision: z.string().describe(
     "approved, rejected, timeout (no tap in time) or no-reply (link lost)",
   ),
-  source: z.string().describe("Where the decision came from: panel or prompt"),
+  source: z.string().describe(
+    "Where the decision came from; always panel for this method",
+  ),
   resolved: z.boolean().describe(
     "True when swamp accepted the approve/reject for runId",
   ),
@@ -394,7 +396,7 @@ export function spawnResume(bin: string, pending: PendingApproval): void {
 /** Model definition for an ESP32-S3 carrying a display. */
 export const model = {
   type: "@vcjdeboer/s3-panel",
-  version: "2026.09.29.2",
+  version: "2026.09.29.3",
   globalArguments: GlobalArgsSchema,
   upgrades: [
     {
@@ -412,6 +414,12 @@ export const model = {
     {
       toVersion: "2026.09.29.2",
       description: "Documentation only: hardware verification recorded",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.09.29.3",
+      description:
+        "Bundles the driving-s3-panel skill; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

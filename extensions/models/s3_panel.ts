@@ -22,7 +22,9 @@
  * `s3panel` firmware, but nothing here is specific to that panel: any firmware
  * answering the same commands will do.
  *
- * Verified 2026-09-26 against that board over its native USB-Serial/JTAG port.
+ * Verified 2026-09-26 against that board over its native USB-Serial/JTAG port;
+ * the approve round trip (tap -> swamp approve/reject -> resume) verified on
+ * the same board 2026-09-29.
  *
  * @module
  */
@@ -392,7 +394,7 @@ export function spawnResume(bin: string, pending: PendingApproval): void {
 /** Model definition for an ESP32-S3 carrying a display. */
 export const model = {
   type: "@vcjdeboer/s3-panel",
-  version: "2026.09.29.1",
+  version: "2026.09.29.2",
   globalArguments: GlobalArgsSchema,
   upgrades: [
     {
@@ -405,6 +407,11 @@ export const model = {
       toVersion: "2026.09.29.1",
       description:
         "approve resolves the suspended manual_approval run itself; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.09.29.2",
+      description: "Documentation only: hardware verification recorded",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

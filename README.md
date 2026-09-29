@@ -152,6 +152,10 @@ it. `approve` lets that someone be a finger on the panel:
 A timeout, a lost serial link or a stray tap resolves nothing: the run stays
 suspended. If swamp refuses the decision the method fails and says so.
 
+Verified end to end on a JC3248W535: a REJECT tap failed the waiting run with
+the panel reason, and an APPROVE tap approved it and the detached resume
+carried the run on to a later step that used the same panel.
+
 ```bash
 swamp workflow run deploy                   # suspends at the approve-deploy step
 swamp model method run panel approve \

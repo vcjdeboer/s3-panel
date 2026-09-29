@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: '@vcjdeboer/s3-panel'
-version: 2026.09.29.1
+version: 2026.09.29.2
 description: >
   Drive an ESP32-S3 with a screen from swamp. One model type, `s3-panel`, is
   everything `@vcjdeboer/s3-device` does plus typed methods for the display:

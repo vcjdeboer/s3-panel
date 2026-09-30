@@ -139,6 +139,24 @@ int main() {
   CHECK_STR(pickSsid("", "  spaced  name "), "  spaced  name ");
   CHECK_STR(pickSsid("", ""), "");
 
+  // Which activity entries are new since the previous list (to highlight them).
+  {
+    Activity before[3] = {{"workflow validate x8", 1331, 300}, {"model method x2", 333, 200},
+                          {"model method x1", 166, 100}};
+    Activity now[3] = {{"model method x3", 499, 400}, {"workflow validate x8", 1331, 300},
+                       {"model method x2", 333, 200}};
+    bool isNew[3];
+    newActivityMask(before, 3, now, 3, isNew);
+    CHECK(isNew[0] && !isNew[1] && !isNew[2]);
+    // Same title and time but different points is a different entry.
+    Activity changed[1] = {{"model method x2", 999, 200}};
+    newActivityMask(before, 3, changed, 1, isNew);
+    CHECK(isNew[0]);
+    // Nothing before (first load): nothing is highlighted.
+    newActivityMask(before, 0, now, 3, isNew);
+    CHECK(!isNew[0] && !isNew[1] && !isNew[2]);
+  }
+
   randomPassword(counter, b, 8);
   CHECK_STR(b, "abcdefgh");
   randomPassword(counter, b, 31);

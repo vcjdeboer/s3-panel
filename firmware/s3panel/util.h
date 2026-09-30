@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "profile_data.h"
+
 // Epoch seconds before this mean SNTP has not set the clock yet.
 const int64_t CLOCK_VALID_AFTER = 1700000000;
 
@@ -41,6 +43,10 @@ struct TapFilter {
   uint32_t lastSeenMs = 0;
 };
 TouchEvent tapFilterFeed(TapFilter &f, bool touching, uint32_t nowMs);
+
+// isNew[i]: now[i] (same time, title and points) is not in before. An empty
+// `before` (first load) marks nothing new.
+void newActivityMask(const Activity *before, int nb, const Activity *now, int nn, bool *isNew);
 
 // Why a Wi-Fi join failed, from ESP-IDF's disconnect reason (0: no reason
 // seen). The returned text is valid until the next call.

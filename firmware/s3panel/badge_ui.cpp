@@ -15,9 +15,20 @@ static unsigned long lastTapMs = 0;
 static uint8_t level = 100;
 static uint32_t drawnGeneration = 0;
 
-static const unsigned long BACK_TO_LOGO_MS = 30000UL;
-static const unsigned long DIM_MS = 5UL * 60 * 1000;
-static const unsigned long OFF_MS = 30UL * 60 * 1000;
+static const unsigned long DIM_MS = 5UL * 60 * 1000;   // any page: 15 %
+static const unsigned long OFF_MS = 10UL * 60 * 1000;  // any page: dark
+static const unsigned long HIGHLIGHT_MS = 5UL * 1000;  // new activity rows
+
+// Activity rows that arrived recently, highlighted until `until` (by content,
+// so they stay marked however the list shifts). Tracked on every page.
+struct Fresh {
+  Activity a;
+  unsigned long until;
+};
+static Fresh fresh[PROFILE_MAX_ACTIVITY];
+static Activity knownActivity[PROFILE_MAX_ACTIVITY];
+static int knownCount = -1;  // -1: nothing seen yet (first load highlights nothing)
+static bool drawnWithFresh = false;
 
 static void textAt(int x, int y, uint8_t size, uint16_t color, const char *s) {
   gfx->setTextSize(size);
@@ -157,6 +168,42 @@ static void drawBadges() {
   gfx->flush();
 }
 
+static bool isFresh(const Activity &a) {
+  unsigned long t = millis();
+  for (int i = 0; i < PROFILE_MAX_ACTIVITY; i++) {
+    const Fresh &f = fresh[i];
+    if (f.until && (long)(f.until - t) > 0 && f.a.at == a.at && f.a.amount == a.amount &&
+        strcmp(f.a.title, a.title) == 0)
+      return true;
+  }
+  return false;
+}
+
+static bool anyFresh() {
+  unsigned long t = millis();
+  for (int i = 0; i < PROFILE_MAX_ACTIVITY; i++)
+    if (fresh[i].until && (long)(fresh[i].until - t) > 0) return true;
+  return false;
+}
+
+// Compare the profile's activity with what was seen before; mark new rows.
+static void trackActivity() {
+  const Profile &p = profileData();
+  bool isNew[PROFILE_MAX_ACTIVITY];
+  newActivityMask(knownActivity, knownCount < 0 ? 0 : knownCount, p.activity, p.activityCount,
+                  isNew);
+  for (int i = 0; i < p.activityCount; i++) {
+    if (!isNew[i]) continue;
+    int slot = 0;  // reuse an expired slot, else the one expiring first
+    for (int j = 1; j < PROFILE_MAX_ACTIVITY; j++)
+      if (fresh[j].until < fresh[slot].until) slot = j;
+    fresh[slot].a = p.activity[i];
+    fresh[slot].until = millis() + HIGHLIGHT_MS;
+  }
+  memcpy(knownActivity, p.activity, sizeof knownActivity);
+  knownCount = p.activityCount;
+}
+
 static void drawActivity() {
   const Profile &p = profileData();
   char pts[24], line[48], age[16];
@@ -164,17 +211,24 @@ static void drawActivity() {
   textAt(10, 12, 3, CYAN_TXT, "ACTIVITY");
   if (p.activityCount == 0) centered(220, 2, RGB565_WHITE, "no activity yet");
   int64_t now = netNow();
-  for (int i = 0; i < p.activityCount; i++) {
-    const Activity &a = p.activity[i];
-    int y = 56 + i * 50;
+  for (int r = 0; r < p.activityCount; r++) {
+    // Oldest at the top, newest at the bottom (the API lists newest first).
+    const Activity &a = p.activity[p.activityCount - 1 - r];
+    int y = 56 + r * 50;
+    bool hot = isFresh(a);
+    if (hot) gfx->fillRect(0, y - 4, SCREEN_W, 46, CYAN_TXT);
+    uint16_t pointsColor = hot ? RGB565_BLACK : CYAN_TXT;
+    uint16_t ageColor = hot ? RGB565_BLACK : CYAN_DIM;
+    uint16_t titleColor = hot ? RGB565_BLACK : RGB565_WHITE;
     formatThousands(a.amount, pts, sizeof pts);
     snprintf(line, sizeof line, "+%s", pts);
-    textAt(10, y, 2, CYAN_TXT, line);
+    textAt(10, y, 2, pointsColor, line);
     relativeAge(now, a.at, age, sizeof age);
-    textAt(SCREEN_W - 10 - (int)strlen(age) * 6, y + 4, 1, CYAN_DIM, age);
+    textAt(SCREEN_W - 10 - (int)strlen(age) * 6, y + 4, 1, ageColor, age);
     fitText(a.title, 25, line, sizeof line);
-    textAt(10, y + 20, 2, RGB565_WHITE, line);
+    textAt(10, y + 20, 2, titleColor, line);
   }
+  drawnWithFresh = anyFresh();
   centered(462, 1, CYAN_DIM, "tap for logo");
   gfx->flush();
 }
@@ -210,16 +264,21 @@ bool uiBadgeTap() {
 }
 
 void uiBadgeLoop() {
+  // The page stays where the user left it; only the brightness follows idleness.
   unsigned long idle = millis() - lastTapMs;
-  if (view != VIEW_LOGO && idle > BACK_TO_LOGO_MS) show(VIEW_LOGO);
-  if (view == VIEW_LOGO) {
-    if (idle > OFF_MS) {
-      if (level != 0) setLevel(0);
-    } else if (idle > DIM_MS) {
-      if (level != 15) setLevel(15);
-    }
+  if (idle > OFF_MS) {
+    if (level != 0) setLevel(0);
+  } else if (idle > DIM_MS) {
+    if (level != 15) setLevel(15);
   }
-  if (view != VIEW_LOGO && drawnGeneration != profileGeneration()) show(view);
+  bool changed = drawnGeneration != profileGeneration();
+  if (changed && profileHave()) trackActivity();
+  if (view == VIEW_LOGO) {
+    drawnGeneration = profileGeneration();
+    return;
+  }
+  // Redraw on new data, and on the activity page when a highlight runs out.
+  if (changed || (view == VIEW_ACTIVITY && drawnWithFresh && !anyFresh())) show(view);
 }
 
 void uiConnecting() {

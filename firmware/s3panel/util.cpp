@@ -191,6 +191,16 @@ void htmlEscape(const char *in, char *out, size_t cap) {
   out[k] = '\0';
 }
 
+void newActivityMask(const Activity *before, int nb, const Activity *now, int nn, bool *isNew) {
+  for (int i = 0; i < nn; i++) {
+    bool seen = nb == 0;
+    for (int j = 0; j < nb && !seen; j++)
+      seen = before[j].at == now[i].at && before[j].amount == now[i].amount &&
+             strcmp(before[j].title, now[i].title) == 0;
+    isNew[i] = !seen;
+  }
+}
+
 const char *pickSsid(const char *selected, const char *other) {
   return (other && other[0]) ? other : selected;
 }

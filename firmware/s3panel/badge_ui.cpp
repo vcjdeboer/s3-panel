@@ -29,6 +29,8 @@ static Fresh fresh[PROFILE_MAX_ACTIVITY];
 static Activity knownActivity[PROFILE_MAX_ACTIVITY];
 static int knownCount = -1;  // -1: nothing seen yet (first load highlights nothing)
 static bool drawnWithFresh = false;
+static unsigned long drawnAtMs = 0;
+static const unsigned long AGES_MS = 10UL * 1000;  // activity page: refresh the "4m ago" ages
 
 static void textAt(int x, int y, uint8_t size, uint16_t color, const char *s) {
   gfx->setTextSize(size);
@@ -240,6 +242,7 @@ static void show(UiView v) {
   else if (v == VIEW_BADGES) drawBadges();
   else drawActivity();
   drawnGeneration = profileGeneration();
+  drawnAtMs = millis();
 }
 
 void uiBadgeEnter() {
@@ -277,8 +280,11 @@ void uiBadgeLoop() {
     drawnGeneration = profileGeneration();
     return;
   }
-  // Redraw on new data, and on the activity page when a highlight runs out.
-  if (changed || (view == VIEW_ACTIVITY && drawnWithFresh && !anyFresh())) show(view);
+  // Redraw on new data; on the activity page also when a highlight runs out,
+  // and every AGES_MS so the ages keep up.
+  if (changed || (view == VIEW_ACTIVITY && ((drawnWithFresh && !anyFresh()) ||
+                                           millis() - drawnAtMs >= AGES_MS)))
+    show(view);
 }
 
 void uiConnecting() {

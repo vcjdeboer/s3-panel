@@ -19,7 +19,8 @@ reports the state.
 
 On the badge, taps cycle logo, profile, badges, activity; a page stays until
 the next tap. Activity is listed oldest to newest (newest at the bottom), and
-rows that arrive while the page is open flash cyan for 2 s. After 5 minutes
+rows that arrive while the page is open flash cyan for 2 s; its ages refresh
+every 10 s. After 5 minutes
 without a touch the backlight dims to 15 %, after 10 minutes it goes dark, on
 any page; only a tap wakes it (the first tap just wakes), never new activity.
 

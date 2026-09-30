@@ -40,7 +40,7 @@ static FetchResult getJson(const String &url, JsonDocument &filter, JsonDocument
   http.useHTTP10(true);  // no chunked encoding
   http.setConnectTimeout(8000);
   http.setTimeout(8000);
-  http.setUserAgent("s3panel/0.12");
+  http.setUserAgent("s3panel/0.12.1");
   if (!http.begin(client, url)) return FETCH_CONNECT;
   code = http.GET();
   FetchResult r;
@@ -230,6 +230,14 @@ void profileLoop(bool wifiUp, bool mayFetch) {
       settle(bgResult, bgOut, bgCode);
     }
   }
+  // Wi-Fi back after a failed fetch: try now instead of waiting out the backoff,
+  // so "offline" does not outlive the outage.
+  static bool wasUp = false;
+  if (wifiUp && !wasUp && (last == FETCH_CONNECT || last == FETCH_HTTP)) {
+    nextDueMs = millis();
+    backoffIdx = 0;
+  }
+  wasUp = wifiUp;
   if (!user[0] || stopped || !wifiUp || !mayFetch || bgBusy || !worker) return;
   unsigned long now = millis();
   bool due = (long)(now - nextDueMs) >= 0;

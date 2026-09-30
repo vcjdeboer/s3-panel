@@ -206,13 +206,21 @@ export const ConfigSchema = z.object({
   elapsedMs: z.number(),
 });
 
+/** Length in UTF-8 bytes: what the board and the Wi-Fi standard count. */
+function utf8Length(s: string): number {
+  return new TextEncoder().encode(s).length;
+}
+
 /**
  * A Wi-Fi password the board accepts: empty for an open network, else 8 to 63
- * characters. Sensitive: pass it from a vault expression, never inline.
+ * bytes. Sensitive: pass it from a vault expression, never inline.
  */
-export const WifiPasswordSchema = z.string().max(63).refine(
-  (p) => p.length === 0 || p.length >= 8,
-  "a Wi-Fi password is empty (open network) or 8 to 63 characters",
+export const WifiPasswordSchema = z.string().refine(
+  (p) => {
+    const n = utf8Length(p);
+    return n === 0 || (n >= 8 && n <= 63);
+  },
+  "a Wi-Fi password is empty (open network) or 8 to 63 bytes (UTF-8)",
 ).meta({
   sensitive: true,
   description:
@@ -220,10 +228,16 @@ export const WifiPasswordSchema = z.string().max(63).refine(
 });
 
 /**
- * A Wi-Fi network name, 1 to 32 characters. Sensitive too: a home SSID often
+ * A Wi-Fi network name, 1 to 32 bytes. Sensitive too: a home SSID often
  * names its owner or address, so reports show it as `***`.
  */
-export const WifiSsidSchema = z.string().min(1).max(32).meta({
+export const WifiSsidSchema = z.string().refine(
+  (s) => {
+    const n = utf8Length(s);
+    return n >= 1 && n <= 32;
+  },
+  "an SSID is 1 to 32 bytes (UTF-8)",
+).meta({
   sensitive: true,
   description:
     "Wi-Fi network name; use ${{ vault.get(<vault>, <key>) }}, never a literal",

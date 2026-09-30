@@ -66,7 +66,7 @@
 #include "panel.h"
 #include "util.h"
 
-#define FW "s3panel 0.12"
+#define FW "s3panel 0.12.1"
 #define TOUCH_ADDR 0x3B
 #define TOUCH_SDA 4
 #define TOUCH_SCL 8
@@ -119,6 +119,7 @@ static PanelConfig cfg;
 static void showState();
 static void enterSetup();  // defined with the setup state
 static void leaveSetup();  // defined with the setup state
+static bool inSetup();     // setup, or swamp holding the screen during setup
 static char apSsid[16], apPass[9];
 static bool setupShowingOpen = false;
 static unsigned long setupDoneMs = 0;
@@ -166,7 +167,8 @@ static void handleConfig(const String &arg) {
   }
   if (sub == "forget") {
     configForget();
-    WiFi.disconnect(true);
+    // Also erase the IDF's own stored network, which other firmware may have left.
+    WiFi.disconnect(true, true);
     configLoad(cfg);
     profileBegin(cfg.api, "");
     // Answer first: entering setup starts the hotspot and scans (2-4 s).
@@ -249,7 +251,7 @@ static void handleConfig(const String &arg) {
     if (profile) profileAdopt(fetched);
   }
   d["joined"] = joined || netConnected();
-  if (devState == ST_SETUP && configComplete(cfg)) leaveSetup();
+  if (inSetup() && configComplete(cfg)) leaveSetup();
   serializeJson(d, Serial);
   Serial.println();
 }
@@ -304,12 +306,31 @@ static void enterSetup() {
   if (displayOk) uiSetupJoin(apSsid, apPass);
 }
 
+static bool inSetup() {
+  return devState == ST_SETUP || (devState == ST_HOST && beforeHost == ST_SETUP);
+}
+
+// Finish setup. Under swamp, only the state to hand back to changes: the screen
+// stays swamp's.
 static void leaveSetup() {
   portalEnd();
   netApStop();
   configLoad(cfg);
-  devState = (netConnected() || profileHave()) ? ST_BADGE : ST_CONNECTING;
+  DevState next = (netConnected() || profileHave()) ? ST_BADGE : ST_CONNECTING;
+  if (devState == ST_HOST) {
+    beforeHost = next;
+    return;
+  }
+  devState = next;
   showState();
+}
+
+// Keep the phone's setup page answering; called from the loop and from the
+// blocking touch waits, so a swamp command never freezes it.
+static void setupService() {
+  if (!inSetup()) return;
+  portalSetDrawing(devState == ST_SETUP);
+  portalLoop();
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -777,6 +798,7 @@ static void screenWait(unsigned long timeoutMs) {
   bool prevTouch = false;
 
   while (millis() - start < timeoutMs) {
+    setupService();
     if (serialInterrupt()) {
       Serial.println("{\"ok\":true,\"aborted\":true}");
       return;
@@ -941,6 +963,7 @@ static void handle(const String &lineIn) {
     if (timeout <= 0) timeout = 30000;
     unsigned long start = millis();
     while (millis() - start < timeout) {
+      setupService();
       if (serialInterrupt()) {
         Serial.println("{\"ok\":true,\"points\":0,\"aborted\":true}");
         return;
@@ -1163,10 +1186,14 @@ void loop() {
     if (displayOk) uiBadgeEnter();
   }
   profileLoop(netConnected(), devState != ST_HOST && devState != ST_SETUP);
-  if (devState == ST_SETUP) {
-    portalLoop();
+  if (inSetup()) {
+    setupService();
     PortalPhase ph = portalPhase();
-    if (ph == PORTAL_DONE) {
+    if (ph == PORTAL_DONE && devState == ST_HOST) {
+      leaveSetup();  // finished from the phone while swamp holds the screen
+    } else if (devState != ST_SETUP) {
+      // swamp holds the screen: the rest waits for the hand-back
+    } else if (ph == PORTAL_DONE) {
       if (!setupDoneMs) {
         setupDoneMs = millis();
         if (displayOk) uiHello(profileData());

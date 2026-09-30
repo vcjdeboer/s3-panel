@@ -49,6 +49,22 @@ int main() {
   char small[4];
   toDisplayAscii("abcdef", small, sizeof small);               CHECK_STR(small, "abc");
   toDisplayAscii("a\xE2\x80\xA6", small, sizeof small);        CHECK_STR(small, "a");
+  // Accented letters lose the accent; ligatures and sharp s spell out.
+  toDisplayAscii("Jos\xC3\xA9", b, sizeof b);                   CHECK_STR(b, "Jose");
+  toDisplayAscii("Stra\xC3\x9F" "e", b, sizeof b);              CHECK_STR(b, "Strasse");
+  toDisplayAscii("\xC5\x81\xC3\xB3" "d\xC5\xBA", b, sizeof b);  CHECK_STR(b, "Lodz");
+  toDisplayAscii("\xC5\x92uvre", b, sizeof b);                  CHECK_STR(b, "OEuvre");
+  toDisplayAscii("e\xCC\x81", b, sizeof b);                     CHECK_STR(b, "e");
+  toDisplayAscii("a\xC2\xA0" "b", b, sizeof b);                 CHECK_STR(b, "a b");
+  // One emoji is one "?", however many code points build it.
+  toDisplayAscii("\xE2\x9D\xA4\xEF\xB8\x8F!", b, sizeof b);     CHECK_STR(b, "?!");
+  toDisplayAscii("\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7 x", b,
+                 sizeof b);                                     CHECK_STR(b, "? x");
+  toDisplayAscii("\xF0\x9F\x91\x8D\xF0\x9F\x8F\xBD", b, sizeof b); CHECK_STR(b, "?");
+  toDisplayAscii("\xF0\x9F\x87\xB3\xF0\x9F\x87\xB1", b, sizeof b); CHECK_STR(b, "?");
+  toDisplayAscii("\xF0\x9F\x87\xB3\xF0\x9F\x87\xB1\xF0\x9F\x87\xA9\xF0\x9F\x87\xAA", b, sizeof b);
+  CHECK_STR(b, "??");
+  toDisplayAscii("1\xEF\xB8\x8F\xE2\x83\xA3", b, sizeof b);     CHECK_STR(b, "1");
 
   fitText("OG Swamper", 25, b, sizeof b);        CHECK_STR(b, "OG Swamper");
   fitText("abcdefghijklmnop", 10, b, sizeof b);  CHECK_STR(b, "abcdefg...");

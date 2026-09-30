@@ -56,21 +56,58 @@ void relativeAge(int64_t now, int64_t then, char *out, size_t cap) {
   else snprintf(out, cap, "%dd ago", (int)(d / 86400));
 }
 
+// Latin-1 and Latin Extended-A letters without their accents, one per code
+// point from U+00C0; '?' marks the few that need two letters (below).
+static const char LATIN_BASE[] =
+    "AAAAAA?CEEEEIIII" "DNOOOOO?OUUUUY??" "aaaaaa?ceeeeiiii" "dnooooo?ouuuuy?y"
+    "AaAaAaCcCcCcCcDd" "DdEeEeEeEeEeGgGg" "GgGgHhHhIiIiIiIi" "Ii??JjKkkLlLlLlL"
+    "lLlNnNnNnnNnOoOo" "Oo??RrRrRrSsSsSs" "SsTtTtTtUuUuUuUu" "UuUuWwYyYZzZzZzs";
+
+// Code points that change how the previous character looks rather than adding
+// one: combining marks, variation selectors, zero-width characters, emoji skin
+// tones and tag characters. They are dropped.
+static bool isModifier(uint32_t cp) {
+  return (cp >= 0x0300 && cp <= 0x036F) || (cp >= 0x20D0 && cp <= 0x20FF) ||
+         (cp >= 0xFE00 && cp <= 0xFE0F) || cp == 0x200B || cp == 0x200C || cp == 0x200D ||
+         cp == 0xFEFF || (cp >= 0x1F3FB && cp <= 0x1F3FF) || (cp >= 0xE0000 && cp <= 0xE007F);
+}
+
+static bool isRegionalIndicator(uint32_t cp) { return cp >= 0x1F1E6 && cp <= 0x1F1FF; }
+
 static const char *asciiFor(uint32_t cp) {
   switch (cp) {
+    case 0x00A0: return " ";
+    case 0x00C6: return "AE";
+    case 0x00DE: return "Th";
+    case 0x00DF: return "ss";
+    case 0x00E6: return "ae";
+    case 0x00F7: return "/";
+    case 0x00FE: return "th";
+    case 0x0132: return "IJ";
+    case 0x0133: return "ij";
+    case 0x0152: return "OE";
+    case 0x0153: return "oe";
     case 0x00D7: return "x";
     case 0x00B7: case 0x2022: case 0x2013: case 0x2014: return "-";
     case 0x2018: case 0x2019: return "'";
     case 0x201C: case 0x201D: return "\"";
     case 0x2026: return "...";
-    default: return "?";
+    default: break;
   }
+  if (cp >= 0x00C0 && cp <= 0x017F) {
+    static char one[2] = {0, 0};
+    one[0] = LATIN_BASE[cp - 0x00C0];
+    return one;
+  }
+  return "?";
 }
 
 void toDisplayAscii(const char *in, char *out, size_t cap) {
   if (cap == 0) return;
   size_t k = 0;
   const unsigned char *p = (const unsigned char *)(in ? in : "");
+  bool joined = false;    // after a zero-width joiner: this glyph belongs to the last
+  bool flagHalf = false;  // a flag is two regional indicators, drawn as one "?"
   while (*p) {
     uint32_t cp;
     int len;
@@ -84,6 +121,20 @@ void toDisplayAscii(const char *in, char *out, size_t cap) {
       cp = (cp << 6) | (p[i] & 0x3F);
     }
     p += len;
+    if (isModifier(cp)) {
+      joined = joined || cp == 0x200D;
+      continue;
+    }
+    if (joined) {
+      joined = false;
+      continue;
+    }
+    if (isRegionalIndicator(cp)) {
+      flagHalf = !flagHalf;
+      if (!flagHalf) continue;
+    } else {
+      flagHalf = false;
+    }
     char one[2] = {0, 0};
     const char *rep = one;
     if (cp < 0x80) one[0] = cp < 0x20 ? ' ' : (char)cp;

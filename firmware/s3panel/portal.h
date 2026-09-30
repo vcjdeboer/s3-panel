@@ -8,6 +8,9 @@ enum PortalPhase { PORTAL_IDLE, PORTAL_CHECKING, PORTAL_ERROR, PORTAL_DONE };
 void portalBegin();  // on a running hotspot; scans networks now
 void portalLoop();   // serves requests; runs a pending check (blocking, ~20 s)
 void portalEnd();
+// Whether the portal may draw its checking and error screens (not while swamp
+// holds the screen).
+void portalSetDrawing(bool on);
 PortalPhase portalPhase();
 // Diagnostics over USB (`setup status`): phase, last message, recent requests.
 #include <Print.h>

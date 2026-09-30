@@ -24,6 +24,9 @@ static bool pending = false;
 static char recent[8][48];  // the last requests: "GET /generate_204 host"
 static int recentNext = 0;
 static unsigned long requests = 0;
+static bool drawing = true;  // off while swamp holds the screen
+
+void portalSetDrawing(bool on) { drawing = on; }
 
 static void note() {
   requests++;
@@ -150,11 +153,12 @@ static void handleRescan() {
 
 static void runCheck() {
   pending = false;
-  uiSetupChecking(wantSsid);
+  if (drawing) uiSetupChecking(wantSsid);
+  // Messages leave the network name out: `setup status` reports them over USB.
   if (!netJoin(wantSsid, wantPass, 20000)) {
     const char *why = joinReasonText(netLastReason());
-    snprintf(message, sizeof message, "couldn't join %s: %s", wantSsid, why);
-    uiSetupError("couldn't join", why);
+    snprintf(message, sizeof message, "couldn't join that network: %s", why);
+    if (drawing) uiSetupError("couldn't join", why);
     memset(wantPass, 0, sizeof wantPass);
     phase = PORTAL_ERROR;
     return;
@@ -169,10 +173,10 @@ static void runCheck() {
   if (r != FETCH_OK) {
     if (r == FETCH_NOT_FOUND) {
       snprintf(message, sizeof message, "no swamp user called %s", wantUser);
-      uiSetupError("no swamp user", wantUser);
+      if (drawing) uiSetupError("no swamp user", wantUser);
     } else {
-      snprintf(message, sizeof message, "joined %s but couldn't reach swamp-club.com", wantSsid);
-      uiSetupError("no swamp-club via", wantSsid);
+      snprintf(message, sizeof message, "joined the network but couldn't reach swamp-club.com");
+      if (drawing) uiSetupError("no swamp-club via", wantSsid);
     }
     WiFi.disconnect();  // station only; the hotspot stays
     memset(wantPass, 0, sizeof wantPass);

@@ -342,8 +342,12 @@ static void setupHeader(const char *step) {
   textAt(10, 52, 2, PINK_TXT, step);
 }
 
+static char setupApSsid[16], setupApPass[9];  // shown again after an error
+
 void uiSetupJoin(const char *apSsid, const char *apPass) {
   char qr[128], buf[48];
+  strlcpy(setupApSsid, apSsid, sizeof setupApSsid);
+  strlcpy(setupApPass, apPass, sizeof setupApPass);
   setupHeader("1 - scan to join");
   wifiQrText(apSsid, apPass, qr, sizeof qr);
   drawQr(qr, 30, 80, 260);
@@ -364,18 +368,31 @@ void uiSetupOpen() {
 }
 
 void uiSetupChecking(const char *ssid) {
+  char shown[40];
+  toDisplayAscii(ssid, shown, sizeof shown);
   setupHeader("checking...");
   centered(200, 2, RGB565_WHITE, "joining");
-  centered(230, 2, CYAN_TXT, ssid);
+  centered(230, 2, CYAN_TXT, shown);
   centered(270, 2, RGB565_WHITE, "and finding your");
   centered(300, 2, RGB565_WHITE, "swamp profile");
   gfx->flush();
 }
 
 void uiSetupError(const char *line1, const char *line2) {
+  char shown[40], buf[48];
+  toDisplayAscii(line2, shown, sizeof shown);
   setupHeader("not yet");
   centered(200, 2, PINK_TXT, line1);
-  centered(230, 2, RGB565_WHITE, line2);
+  centered(230, 2, RGB565_WHITE, shown);
   centered(300, 2, CYAN_DIM, "fix it on your phone");
+  // Joining the home network can move the hotspot's channel and drop the
+  // phone, which then needs these to get back on.
+  if (setupApSsid[0]) {
+    centered(360, 1, CYAN_DIM, "phone dropped off? rejoin");
+    snprintf(buf, sizeof buf, "network  %s", setupApSsid);
+    textAt(10, 385, 2, RGB565_WHITE, buf);
+    snprintf(buf, sizeof buf, "password %s", setupApPass);
+    textAt(10, 415, 2, RGB565_WHITE, buf);
+  }
   gfx->flush();
 }

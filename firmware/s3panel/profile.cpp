@@ -26,7 +26,7 @@ static uint32_t generation = 0;
 static char parseNote[40] = "";  // which request failed to parse, and how
 
 static const unsigned long REFRESH_MS = 15UL * 60 * 1000;  // whole profile
-static const unsigned long ACTIVITY_MS = 30UL * 1000;      // combat log only (~3 KB)
+static const unsigned long ACTIVITY_MS = 10UL * 1000;      // combat log only (~3 KB)
 static const unsigned long STALE_ON_TAP_MS = 5UL * 60 * 1000;
 static const unsigned long MIN_TAP_GAP_MS = 60UL * 1000;
 static const unsigned long BACKOFF_MS[] = {60000UL, 120000UL, 300000UL, 900000UL};

@@ -5,7 +5,7 @@
 // USB serial, one command per line in, one JSON object per line out, so the
 // host never has to push pixels. Driven from swamp by @vcjdeboer/s3-panel.
 //
-//   ping              -> {"ok":true,"fw":"s3panel 0.11"}
+//   ping              -> {"ok":true,"fw":"s3panel 0.12"}
 //   status            -> {"ok":true,"display":bool,"w":320,"h":480,"psram":N,
 //                          "backlight":bool,"touch":bool}
 //   text <msg>        -> {"ok":true,"lines":N}    ('|' splits lines, drawn top-down)
@@ -53,8 +53,16 @@
 #include <Arduino_GFX_Library.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
+#include <WiFi.h>
+#include <esp_heap_caps.h>
 
-#define FW "s3panel 0.11"
+#include "config.h"
+#include "device_state.h"
+#include "net.h"
+#include "panel.h"
+#include "util.h"
+
+#define FW "s3panel 0.12"
 #define TOUCH_ADDR 0x3B
 #define TOUCH_SDA 4
 #define TOUCH_SCL 8
@@ -62,8 +70,6 @@
 #define TOUCH_RST 12
 #define TOUCH_I2C_CLOCK 400000
 #define PIN_BL 1
-#define SCREEN_W 320
-#define SCREEN_H 480
 
 #ifndef PANEL_INIT_TYPE
 #define PANEL_INIT_TYPE 1
@@ -81,7 +87,7 @@ Arduino_GFX *panel = new Arduino_AXS15231B(
     0, 0, 0, 0, PANEL_INIT, sizeof(PANEL_INIT));
 Arduino_Canvas *gfx = new Arduino_Canvas(SCREEN_W, SCREEN_H, panel, 0, 0, 0);
 
-static bool displayOk = false;
+bool displayOk = false;
 static bool touchOk = false;
 static bool backlightOn = false;
 static bool logoMode = false;
@@ -102,12 +108,116 @@ static void latchTouch(int x, int y) {
   touchCount++;
 }
 
+// ── device state ─────────────────────────────────────────────────────────────
+
+static DevState devState = ST_CONNECTING;
+static PanelConfig cfg;
+
+static const char *stateName(DevState s) {
+  switch (s) {
+    case ST_SETUP: return "setup";
+    case ST_CONNECTING: return "connecting";
+    case ST_BADGE: return "badge";
+    default: return "host";
+  }
+}
+
+static void replyError(const char *e) {
+  JsonDocument d;
+  d["ok"] = false;
+  d["error"] = e;
+  serializeJson(d, Serial);
+  Serial.println();
+}
+
+static bool validPass(const char *p) {
+  size_t n = strlen(p);
+  return n == 0 || (n >= 8 && n <= 63);
+}
+
+// config set|show|forget. Replies name keys, never values.
+static void handleConfig(const String &arg) {
+  String sub = arg, rest = "";
+  int sp = arg.indexOf(' ');
+  if (sp >= 0) {
+    sub = arg.substring(0, sp);
+    rest = arg.substring(sp + 1);
+  }
+  if (sub == "show") {
+    JsonDocument d;
+    d["ok"] = true;
+    d["ssidSet"] = cfg.ssid[0] != 0;
+    d["passSet"] = cfg.pass[0] != 0;
+    d["profile"] = cfg.profile;
+    d["api"] = cfg.api;
+    serializeJson(d, Serial);
+    Serial.println();
+    return;
+  }
+  if (sub == "forget") {
+    configForget();
+    WiFi.disconnect(true);
+    configLoad(cfg);
+    devState = ST_CONNECTING;
+    Serial.println("{\"ok\":true,\"forgotten\":true}");
+    return;
+  }
+  if (sub != "set") {
+    replyError("config set|show|forget");
+    return;
+  }
+  JsonDocument in;
+  if (deserializeJson(in, rest)) {
+    replyError("invalid");
+    return;
+  }
+  const char *ssid = in["ssid"];
+  const char *pass = in["pass"] | "";
+  const char *api = in["api"];
+  if ((ssid && (!ssid[0] || strlen(ssid) > 32)) || !validPass(pass) ||
+      (api && (strlen(api) >= sizeof cfg.api || (api[0] && strncmp(api, "https://", 8) != 0)))) {
+    replyError("invalid");
+    return;
+  }
+  bool joined = false;
+  if (ssid) {
+    if (!netJoin(ssid, pass, 20000)) {
+      netBegin(cfg.ssid, cfg.pass);  // back to the saved network, if any
+      replyError("join");
+      return;
+    }
+    joined = true;
+  }
+  JsonDocument d;
+  d["ok"] = true;
+  JsonArray stored = d["stored"].to<JsonArray>();
+  if (ssid) {
+    configSaveWifi(ssid, pass);
+    stored.add("ssid");
+    stored.add("pass");
+  }
+  if (api) {
+    configSaveApi(api);
+    stored.add("api");
+  }
+  configLoad(cfg);
+  d["joined"] = joined || netConnected();
+  serializeJson(d, Serial);
+  Serial.println();
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-static void setBacklight(bool on) {
-  digitalWrite(PIN_BL, on ? HIGH : LOW);
-  backlightOn = on;
+#define BL_FREQ 5000
+#define BL_BITS 8
+
+void setBacklightPct(uint8_t pct) {
+  if (pct > 100) pct = 100;
+  ledcWrite(PIN_BL, (uint32_t)pct * 255 / 100);
+  backlightOn = pct > 0;
 }
+
+static void setBacklight(bool on) { setBacklightPct(on ? 100 : 0); }
 
 static uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
   return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
@@ -171,15 +281,8 @@ static int drawText(const String &msg) {
 // ── logo ─────────────────────────────────────────────────────────────────────
 
 #define LOGO_BG     0x0000
-#define CYAN_TXT    0x45BB
-#define PINK_TXT    0xD98F
-#define EYE_YELLOW  0xF645
-#define BODY_DARK   0x1147
-#define BODY_GLOW   0x2B5B
-#define CYAN_DIM    0x22D7
-#define PINK_DIM    0x6146
 
-static void drawLogo() {
+void drawLogo() {
   randomSeed(42);
   gfx->fillScreen(LOGO_BG);
 
@@ -447,7 +550,7 @@ static bool screenAdd(const String &json) {
   return true;
 }
 
-static void drawMiniLogo() {
+void drawMiniLogo(const char *subtitle) {
   gfx->fillScreen(RGB565_BLACK);
 
   gfx->setTextSize(4);
@@ -457,8 +560,8 @@ static void drawMiniLogo() {
 
   gfx->setTextSize(2);
   gfx->setTextColor(PINK_TXT);
-  gfx->setCursor((320 - 7 * 12) / 2, 42);
-  gfx->print("APPROVE");
+  gfx->setCursor((320 - (int)strlen(subtitle) * 12) / 2, 42);
+  gfx->print(subtitle);
 
   gfx->fillCircle(160, 90, 14, BODY_DARK);
   gfx->fillCircle(160, 108, 22, BODY_DARK);
@@ -487,7 +590,7 @@ static void drawMiniLogo() {
 }
 
 static void screenShow() {
-  drawMiniLogo();
+  drawMiniLogo("APPROVE");
 
   const int gutter = 10;
   const int usableW = 320 - 2 * gutter;
@@ -669,10 +772,11 @@ static void handle(const String &lineIn) {
   if (cmd == "status") {
     Serial.printf(
         "{\"ok\":true,\"display\":%s,\"w\":%d,\"h\":%d,\"psram\":%u,"
-        "\"backlight\":%s,\"touch\":%s,\"touchCount\":%u}\n",
+        "\"backlight\":%s,\"touch\":%s,\"touchCount\":%u,\"state\":\"%s\",\"heap\":%u}\n",
         displayOk ? "true" : "false", SCREEN_W, SCREEN_H,
         (unsigned)ESP.getPsramSize(), backlightOn ? "true" : "false",
-        touchOk ? "true" : "false", touchCount);
+        touchOk ? "true" : "false", touchCount, stateName(devState),
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     return;
   }
   if (cmd == "text") {
@@ -834,6 +938,15 @@ static void handle(const String &lineIn) {
     Serial.printf("{\"ok\":true,\"backlight\":%s}\n", backlightOn ? "true" : "false");
     return;
   }
+  if (cmd == "wifi") {
+    if (arg == "status") netStatusJson(Serial, stateName(devState));
+    else replyError("wifi status");
+    return;
+  }
+  if (cmd == "config") {
+    handleConfig(arg);
+    return;
+  }
   Serial.printf("{\"ok\":false,\"error\":\"unknown command: %s\"}\n", cmd.c_str());
 }
 
@@ -842,7 +955,7 @@ static void handle(const String &lineIn) {
 void setup() {
   Serial.begin(115200);
 
-  pinMode(PIN_BL, OUTPUT);
+  ledcAttach(PIN_BL, BL_FREQ, BL_BITS);
   setBacklight(false);
 
   displayOk = gfx->begin();
@@ -865,9 +978,13 @@ void setup() {
   Wire.beginTransmission(TOUCH_ADDR);
   touchOk = (Wire.endTransmission() == 0);
 
-  Serial.printf("{\"ok\":%s,\"fw\":\"%s\",\"display\":%s,\"touch\":%s,\"psram\":%u}\n",
+  netInit();
+  configLoad(cfg);
+  netBegin(cfg.ssid, cfg.pass);
+
+  Serial.printf("{\"ok\":%s,\"fw\":\"%s\",\"display\":%s,\"touch\":%s,\"psram\":%u,\"state\":\"%s\"}\n",
                 displayOk ? "true" : "false", FW, displayOk ? "true" : "false",
-                touchOk ? "true" : "false", (unsigned)ESP.getPsramSize());
+                touchOk ? "true" : "false", (unsigned)ESP.getPsramSize(), stateName(devState));
 }
 
 void loop() {
@@ -881,6 +998,9 @@ void loop() {
       buf += ch;
     }
   }
+
+  netLoop();
+  if (devState == ST_CONNECTING && netConnected()) devState = ST_BADGE;
 
   // Poll touch every cycle: latch it so the host never misses one.
   static bool wasTouching = false;

@@ -241,6 +241,20 @@ and QR codes); from swamp, `configure` (Wi-Fi from a vault), `profile` and `forg
 do the same over USB. Swamp can still borrow the screen at any time; `idle` hands it
 back. Details: `.claude/skills/driving-s3-panel/references/wifi-and-badge.md`.
 
+What is reachable how:
+
+- **USB serial** carries every command: screen, approvals, Wi-Fi and profile
+  settings, factory reset. It has no authentication, so anyone with a cable to
+  the panel can reconfigure it or draw on it; treat USB access like access to an
+  unlocked laptop. The panel never answers with a stored SSID or password, so
+  credentials cannot be read back out. `configure` takes both from a vault and
+  marks them sensitive; `send` refuses a `config set` that carries them.
+- **Wi-Fi** is outbound only in normal use: HTTPS to swamp-club, certificates
+  checked against the built-in CA bundle. The setup page listens only in setup
+  mode, on the panel's own hotspot (random password per session, shown on the
+  screen), and offers the Wi-Fi form and nothing else.
+- **Bluetooth** is not compiled into the firmware.
+
 ## Relationship to `@vcjdeboer/esp32-s3`
 
 swamp resolves extension dependencies only for workflows, so a model type cannot

@@ -220,12 +220,50 @@ export const WifiPasswordSchema = z.string().max(63).refine(
 });
 
 /**
+ * A Wi-Fi network name, 1 to 32 characters. Sensitive too: a home SSID often
+ * names its owner or address, so reports show it as `***`.
+ */
+export const WifiSsidSchema = z.string().min(1).max(32).meta({
+  sensitive: true,
+  description:
+    "Wi-Fi network name; use ${{ vault.get(<vault>, <key>) }}, never a literal",
+});
+
+/**
  * The `config set` line for Wi-Fi credentials. JSON keeps quotes, spaces,
  * separators and even newlines inside one protocol line, byte for byte.
  */
 export function configureLine(ssid: string, password: string): string {
   return "config set " + JSON.stringify({ ssid, pass: password });
 }
+
+/**
+ * Whether a `send` line would carry Wi-Fi credentials: a `config set` whose JSON
+ * has `ssid` or `pass`, or does not parse as an object (the board refuses that
+ * anyway, and it may still hold a password). `profile` and `api` pass.
+ */
+export function carriesWifiCredentials(line: string): boolean {
+  const m = /^\s*config\s+set(?:\s+([\s\S]*))?$/i.exec(line);
+  if (!m) return false;
+  try {
+    const o = JSON.parse(m[1] ?? "");
+    if (typeof o !== "object" || o === null || Array.isArray(o)) return true;
+    return "ssid" in o || "pass" in o;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * A line for `send`. `send` logs and records its line, so Wi-Fi credentials are
+ * refused here, at argument validation, before the board is touched or anything
+ * is written; `configure` is the way in.
+ */
+export const SendLineSchema = z.string().refine(
+  (line) => !carriesWifiCredentials(line),
+  "send refuses `config set` with Wi-Fi credentials: it would log and record " +
+    "them; use the configure method with vault expressions",
+).describe("The command line, without the newline");
 
 type Reply = Record<string, unknown> | null;
 
@@ -498,7 +536,7 @@ export function baseMethods(): Record<string, unknown> {
         "wrong password never replaces a working one. Pass the password from " +
         "a vault expression; it is never recorded or logged.",
       arguments: z.object({
-        ssid: z.string().min(1).max(32).describe("Wi-Fi network name"),
+        ssid: WifiSsidSchema,
         password: WifiPasswordSchema,
         joinMs: z.number().int().positive().default(30_000).describe(
           "Wait for the board to join and answer; named joinMs so the global " +
@@ -612,7 +650,7 @@ export function baseMethods(): Record<string, unknown> {
         "type has no dedicated method for. No reply within timeoutMs is " +
         "recorded as outcome=timeout, then thrown.",
       arguments: z.object({
-        line: z.string().describe("The command line, without the newline"),
+        line: SendLineSchema,
         timeoutMs: z.number().int().positive().optional().describe(
           "Overrides the instance's timeoutMs for this call",
         ),

@@ -62,6 +62,12 @@ with an apostrophe as `printf 'Name\047s Network' | swamp vault put <vault> wifi
 | `profile` | panel | `profile-latest`: username, points, rank, tier, badgeCount, activityCount, fetchedAt, ok, error |
 | `idle` | panel | a `draw` record; hands the screen back |
 
+Pass `ssid` and `password` to `configure` as `${{ vault.get(...) }}` from a
+workflow; both are sensitive. `send` refuses a `config set` carrying `ssid` or
+`pass` (it would log them); `config set` with only `profile` or `api` still goes
+through `send`. USB has no authentication: whoever holds the cable can
+reconfigure or reset the panel, but cannot read credentials back.
+
 ## Line commands
 
 | Command | Reply |

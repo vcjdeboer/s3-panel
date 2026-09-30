@@ -514,7 +514,7 @@ export function spawnResume(bin: string, pending: PendingApproval): void {
 /** Model definition for an ESP32-S3 carrying a display. */
 export const model = {
   type: "@vcjdeboer/s3-panel",
-  version: "2026.09.29.4",
+  version: "2026.09.30.1",
   globalArguments: GlobalArgsSchema,
   upgrades: [
     {
@@ -544,6 +544,12 @@ export const model = {
       toVersion: "2026.09.29.4",
       description:
         "approve/zonewait wait in slices and honour swamp model cancel; zone records how the wait ended; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.09.30.1",
+      description:
+        "Swamp badge (firmware s3panel 0.12): adds wifi, configure, forget, profile and idle; send refuses Wi-Fi credentials; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -625,8 +631,9 @@ export const model = {
         username: z.string().regex(USERNAME).optional().describe(
           "swamp-club username; omit to refresh the stored one",
         ),
-        fetchMs: z.number().int().positive().default(30_000).describe(
-          "Wait for the board's HTTPS fetch; named fetchMs so the global " +
+        fetchMs: z.number().int().positive().default(90_000).describe(
+          "Wait for the board's HTTPS fetch (it may first wait up to 30 s for a " +
+            "background fetch to finish); named fetchMs so the global " +
             "timeoutMs does not clobber this default",
         ),
       }),
@@ -672,10 +679,11 @@ export const model = {
           );
         }
         if (!fields.ok) {
+          // No error and no username: the board has none stored to fetch.
+          const why = fields.error ??
+            (fields.username ? "unknown" : "no username stored; pass username");
           throw new Error(
-            `the board could not fetch the profile: ${
-              fields.error ?? "unknown"
-            } ` +
+            `the board could not fetch the profile: ${why} ` +
               "(recorded as profile-latest)",
           );
         }

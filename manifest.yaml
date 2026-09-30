@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: '@vcjdeboer/s3-panel'
-version: 2026.09.29.4
+version: 2026.09.30.1
 description: >
   Drive an ESP32-S3 with a screen from swamp. One model type, `s3-panel`, is
   everything `@vcjdeboer/s3-device` does plus typed methods for the display:
@@ -8,7 +8,9 @@ description: >
   (`screen`, `zonewait`) and a physical `approve` for workflow approvals. The board renders and the host says
   what to render, so no pixels cross the wire. Built against a Guition
   JC3248W535 (3.5" 320x480 AXS15231B), but any firmware answering the same
-  commands will do.
+  commands will do. Firmware 0.12 also runs the panel on its own as a swamp-club
+  profile badge on Wi-Fi, set up from a phone; `wifi`, `configure`, `forget`,
+  `profile` and `idle` drive that from swamp.
 repository: 'https://github.com/vcjdeboer/s3-panel'
 license: MIT
 models:

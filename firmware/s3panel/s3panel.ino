@@ -66,7 +66,7 @@
 #include "panel.h"
 #include "util.h"
 
-#define FW "s3panel 0.12.1"
+#define FW "s3panel 0.12.2"
 #define TOUCH_ADDR 0x3B
 #define TOUCH_SDA 4
 #define TOUCH_SCL 8
@@ -299,7 +299,7 @@ static void enterSetup() {
   devState = ST_SETUP;
   setupShowingOpen = false;
   setupDoneMs = 0;
-  netApName(apSsid, sizeof apSsid);
+  netApName(esp_random(), apSsid, sizeof apSsid);
   randomPassword(esp_random, apPass, 8);
   netApStart(apSsid, apPass);
   portalBegin();

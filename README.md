@@ -141,6 +141,19 @@ Each writes a `draw-latest` record carrying the command sent, the board's reply,
 | `zonewait` | `waitMs` (default 12 h) | Blocks until a button is tapped and writes `zone-latest` with its `id` and how the wait `ended` (`tap`, `timeout`, `cancelled`, `aborted`, `no-reply`). `swamp model cancel panel` ends it within about 2 s. |
 | `approve` | `workflow`, `step`, optional `prompt`, `run`, `resolve`, `resume`, `waitMs` | Answers a suspended `manual_approval` step from the panel, end to end. See below. |
 
+## Wi-Fi and badge methods
+
+| Method | Arguments | Notes |
+| --- | --- | --- |
+| `wifi` | none | The board's Wi-Fi link: state (`setup`, `connecting`, `badge`, `host`), connected, ip, rssi, mac. Writes `wifi-latest`. |
+| `configure` | `ssid`, `password` (both sensitive: pass `${{ vault.get(...) }}` from a workflow), `joinMs` | The board joins before it saves, so a wrong password never replaces a working one. Writes `config-latest` with key names only. |
+| `forget` | `confirm=true` | Factory reset into setup mode: Wi-Fi, profile and cache. |
+| `profile` | optional `username`, `fetchMs` | Stores the username (after checking it exists) and fetches now. Writes `profile-latest`. |
+| `idle` | none | Hands the screen back to the badge, setup or connecting screen. |
+
+`send` and `write` refuse a `config set` that carries `ssid` or `pass`, and `send`
+refuses line breaks: both record what they send.
+
 ### Approving a workflow step from the panel
 
 swamp's `manual_approval` step suspends a run until someone approves or rejects
@@ -248,7 +261,8 @@ What is reachable how:
   the panel can reconfigure it or draw on it; treat USB access like access to an
   unlocked laptop. The panel never answers with a stored SSID or password, so
   credentials cannot be read back out. `configure` takes both from a vault and
-  marks them sensitive; `send` refuses a `config set` that carries them.
+  marks them sensitive; `send` and `write` refuse a `config set` that carries
+  them.
 - **Wi-Fi** is outbound only in normal use: HTTPS to swamp-club, certificates
   checked against the built-in CA bundle. The setup page listens only in setup
   mode, on the panel's own hotspot (random password per session, shown on the

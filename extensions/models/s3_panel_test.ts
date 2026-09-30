@@ -27,11 +27,33 @@ import {
   type PendingApproval,
   profileFields,
   resolveApproval,
-  type SwampRunner,
   swampBinary,
+  type SwampRunner,
   USERNAME,
   waitForTap,
 } from "./s3_panel.ts";
+import {
+  SendLineSchema,
+  WifiPasswordSchema,
+  WifiSsidSchema,
+  WriteDataSchema,
+} from "./_lib/s3_base.ts";
+
+Deno.test("send, write and configure guard the Wi-Fi credentials here too", () => {
+  const m = model.methods as unknown as Record<
+    string,
+    { arguments: { shape: Record<string, unknown> } }
+  >;
+  assert(m.send.arguments.shape.line === SendLineSchema);
+  assert(m.write.arguments.shape.data === WriteDataSchema);
+  assert(m.configure.arguments.shape.ssid === WifiSsidSchema);
+  assert(m.configure.arguments.shape.password === WifiPasswordSchema);
+  assert(
+    !SendLineSchema.safeParse('ping\nconfig set {"pass":"hunter2hunter2"}')
+      .success,
+  );
+  assert(SendLineSchema.safeParse('config set {"profile":"example"}').success);
+});
 
 Deno.test("the model type and version are well formed", () => {
   assertEquals(model.type, "@vcjdeboer/s3-panel");
@@ -84,7 +106,9 @@ Deno.test("the panel inherits the whole base and adds exactly the screen methods
 Deno.test("the panel adds its own draw spec on top of the base specs", () => {
   const specs = Object.keys(model.resources);
   assert(specs.includes("draw"), "no draw spec");
-  for (const base of ["devices", "state", "exchange", "sent", "capture", "holder"]) {
+  for (
+    const base of ["devices", "state", "exchange", "sent", "capture", "holder"]
+  ) {
     assert(specs.includes(base), `missing inherited spec ${base}`);
   }
 });
@@ -129,7 +153,12 @@ Deno.test("ordinary text is allowed, including spaces and punctuation", () => {
 // ── workflow gate ────────────────────────────────────────────────────────────
 
 const WAITING: PendingApproval[] = [
-  { workflowName: "deploy", runId: "run-a", stepName: "gate", prompt: "Ship it?" },
+  {
+    workflowName: "deploy",
+    runId: "run-a",
+    stepName: "gate",
+    prompt: "Ship it?",
+  },
   { workflowName: "deploy", runId: "run-b", stepName: "other", prompt: "x" },
   { workflowName: "backup", runId: "run-c", stepName: "gate", prompt: "y" },
 ];
@@ -162,30 +191,52 @@ Deno.test("no waiting run is refused before anything is drawn", async () => {
 Deno.test("two waiting runs are refused unless a run id picks one", async () => {
   const two = [...WAITING, { ...WAITING[0], runId: "run-z" }];
   const { run } = fakeSwamp(two);
-  const err = await assertRejects(() => findPendingApproval(run, "deploy", "gate"));
-  assert((err as Error).message.includes("run-z"), "should list the candidates");
+  const err = await assertRejects(() =>
+    findPendingApproval(run, "deploy", "gate")
+  );
+  assert(
+    (err as Error).message.includes("run-z"),
+    "should list the candidates",
+  );
   const p = await findPendingApproval(run, "deploy", "gate", "run-z");
   assertEquals(p.runId, "run-z");
 });
 
 Deno.test("a run id that is not waiting at that step is refused", async () => {
   const { run } = fakeSwamp(WAITING);
-  await assertRejects(() => findPendingApproval(run, "deploy", "gate", "run-c"));
+  await assertRejects(() =>
+    findPendingApproval(run, "deploy", "gate", "run-c")
+  );
 });
 
 Deno.test("a tapped decision becomes exactly that swamp verb for that run", async () => {
-  for (const [decision, verb] of [["approved", "approve"], ["rejected", "reject"]] as const) {
+  for (
+    const [decision, verb] of [["approved", "approve"], [
+      "rejected",
+      "reject",
+    ]] as const
+  ) {
     const { run, calls } = fakeSwamp(WAITING);
     const err = await resolveApproval(run, WAITING[0], decision, "why");
     assertEquals(err, undefined);
-    assertEquals(calls[0].slice(0, 6), ["workflow", verb, "deploy", "gate", "--run", "run-a"]);
+    assertEquals(calls[0].slice(0, 6), [
+      "workflow",
+      verb,
+      "deploy",
+      "gate",
+      "--run",
+      "run-a",
+    ]);
     assertEquals(calls[0].slice(6), ["--reason", "why", "--json"]);
   }
 });
 
 Deno.test("swamp refusing the decision is reported, not swallowed", async () => {
   const { run } = fakeSwamp(WAITING, 1);
-  assertEquals(await resolveApproval(run, WAITING[0], "approved", "why"), "refused");
+  assertEquals(
+    await resolveApproval(run, WAITING[0], "approved", "why"),
+    "refused",
+  );
 });
 
 Deno.test("swamp JSON is found among log lines", () => {
@@ -212,8 +263,18 @@ function fakeBoard(replies: (Record<string, unknown> | null)[]) {
 }
 
 Deno.test("a tap ends the wait with the zone that was hit", async () => {
-  const { send } = fakeBoard([{ ok: true, timeout: true }, { ok: true, id: "go", x: 5, y: 9 }]);
-  assertEquals(await waitForTap(send, 60_000), { ended: "tap", id: "go", x: 5, y: 9 });
+  const { send } = fakeBoard([{ ok: true, timeout: true }, {
+    ok: true,
+    id: "go",
+    x: 5,
+    y: 9,
+  }]);
+  assertEquals(await waitForTap(send, 60_000), {
+    ended: "tap",
+    id: "go",
+    x: 5,
+    y: 9,
+  });
 });
 
 Deno.test("the board is never asked to wait longer than one slice", async () => {
@@ -230,7 +291,9 @@ Deno.test("swamp model cancel (the abort signal) ends the wait between slices", 
   let calls = 0;
   const send = () => {
     if (++calls === 2) ac.abort();
-    return Promise.resolve({ ok: true, timeout: true } as Record<string, unknown>);
+    return Promise.resolve(
+      { ok: true, timeout: true } as Record<string, unknown>,
+    );
   };
   const w = await waitForTap(send, 60_000, ac.signal);
   assertEquals(w.ended, "cancelled");

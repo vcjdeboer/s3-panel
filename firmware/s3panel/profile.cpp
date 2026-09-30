@@ -40,7 +40,7 @@ static FetchResult getJson(const String &url, JsonDocument &filter, JsonDocument
   http.useHTTP10(true);  // no chunked encoding
   http.setConnectTimeout(8000);
   http.setTimeout(8000);
-  http.setUserAgent("s3panel/0.12.1");
+  http.setUserAgent("s3panel/0.12.2");
   if (!http.begin(client, url)) return FETCH_CONNECT;
   code = http.GET();
   FetchResult r;

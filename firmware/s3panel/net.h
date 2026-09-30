@@ -19,5 +19,5 @@ void netScanStart();                      // background scan
 int netScanCollect(char names[][33], int max);  // -1 while running; then as netScan
 void netLoop();                          // starts SNTP after the first connection
 int64_t netNow();                        // epoch seconds; 0 until SNTP set the clock
-void netApName(char *out, size_t cap);   // "swamp-" + last 4 hex of the AP MAC
+void netApName(uint32_t session, char *out, size_t cap);  // "swamp-" + 4 hex, new per setup
 void netStatusJson(Print &out, const char *state);

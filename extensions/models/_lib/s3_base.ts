@@ -268,16 +268,52 @@ export function carriesWifiCredentials(line: string): boolean {
   }
 }
 
+/** Whether any line of `data`, as the board splits it, carries credentials. */
+export function anyLineCarriesWifiCredentials(data: string): boolean {
+  return data.split(/[\r\n]/).some(carriesWifiCredentials);
+}
+
+const CREDENTIALS_REFUSED =
+  "refuses `config set` with Wi-Fi credentials: it would log and record " +
+  "them; use the configure method with vault expressions";
+
 /**
  * A line for `send`. `send` logs and records its line, so Wi-Fi credentials are
  * refused here, at argument validation, before the board is touched or anything
- * is written; `configure` is the way in.
+ * is written; `configure` is the way in. A line break is refused too: the board
+ * would run each line as its own command.
  */
-export const SendLineSchema = z.string().refine(
-  (line) => !carriesWifiCredentials(line),
-  "send refuses `config set` with Wi-Fi credentials: it would log and record " +
-    "them; use the configure method with vault expressions",
-).describe("The command line, without the newline");
+export const SendLineSchema = z.string()
+  .refine(
+    (line) => !/[\r\n]/.test(line),
+    "send takes one command line: no line breaks",
+  )
+  .refine(
+    (line) => !carriesWifiCredentials(line),
+    "send " + CREDENTIALS_REFUSED,
+  )
+  .describe("The command line, without the newline");
+
+/** Bytes for `write`, which records them too: same refusal, per line. */
+export const WriteDataSchema = z.string()
+  .refine(
+    (data) => !anyLineCarriesWifiCredentials(data),
+    "write " + CREDENTIALS_REFUSED,
+  )
+  .describe("The bytes to write, verbatim");
+
+/**
+ * The board's reason for refusing, with the SSID and password masked, in case a
+ * firmware echoes what it was sent.
+ */
+export function maskSecrets(
+  text: string | null,
+  secrets: string[],
+): string | null {
+  if (text === null) return null;
+  return secrets.filter((s) => s.length > 0)
+    .reduce((t, s) => t.split(s).join("***"), text);
+}
 
 type Reply = Record<string, unknown> | null;
 
@@ -552,9 +588,9 @@ export function baseMethods(): Record<string, unknown> {
       arguments: z.object({
         ssid: WifiSsidSchema,
         password: WifiPasswordSchema,
-        joinMs: z.number().int().positive().default(30_000).describe(
-          "Wait for the board to join and answer; named joinMs so the global " +
-            "timeoutMs does not clobber this default",
+        joinMs: z.number().int().min(25_000).default(30_000).describe(
+          "Wait for the board to join and answer (it tries for 20 s); named " +
+            "joinMs so the global timeoutMs does not clobber this default",
         ),
       }),
       execute: async (
@@ -570,7 +606,11 @@ export function baseMethods(): Record<string, unknown> {
         const outcome = !r.response
           ? "timeout"
           : (replyFailed(r.response) ? "error" : "ok");
-        const fields = configFields(r.response);
+        const board = configFields(r.response);
+        const fields = {
+          ...board,
+          error: maskSecrets(board.error, [args.ssid, args.password]),
+        };
         ctx.logger.info(
           "configure: {outcome} stored={stored} joined={joined}",
           {
@@ -714,7 +754,7 @@ export function baseMethods(): Record<string, unknown> {
         "pass a real newline, not a backslash-n. Prefer `send` for anything " +
         "that answers.",
       arguments: z.object({
-        data: z.string().describe("The bytes to write, verbatim"),
+        data: WriteDataSchema,
       }),
       execute: async (args: { data: string }, ctx: MethodContext) => {
         const r = await withLink(ctx, ({ link }) => link.write(args.data));

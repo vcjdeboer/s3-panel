@@ -2,7 +2,6 @@
 
 #include <ArduinoJson.h>
 #include <WiFi.h>
-#include <esp_mac.h>
 #include <time.h>
 
 #include "util.h"
@@ -121,10 +120,10 @@ int64_t netNow() {
   return t >= CLOCK_VALID_AFTER ? (int64_t)t : 0;
 }
 
-void netApName(char *out, size_t cap) {
-  uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
-  snprintf(out, cap, "swamp-%02x%02x", mac[4], mac[5]);
+void netApName(uint32_t session, char *out, size_t cap) {
+  // New each setup, like the password: a phone that saved an earlier
+  // session's password would otherwise keep retrying it and never join.
+  snprintf(out, cap, "swamp-%04x", (unsigned)(session & 0xFFFF));
 }
 
 void netStatusJson(Print &out, const char *state) {

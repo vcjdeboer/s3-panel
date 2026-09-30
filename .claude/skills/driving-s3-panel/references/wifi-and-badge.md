@@ -27,7 +27,8 @@ any page; only a tap wakes it (the first tap just wakes), never new activity.
 ## Set up
 
 - **From a phone (a shipped panel):** power it. Scan the first QR code to join
-  `swamp-xxxx` (a fresh password each time, shown only on the panel). The
+  `swamp-xxxx` (a fresh name and password each time, shown only on the panel,
+  so a phone never retries an old session's saved password). The
   setup page may open by itself; iOS often does not raise it after a QR join,
   so tap the network in Wi-Fi settings, scan the second QR code, or open
   `http://192.168.4.1/`. Pick the network from the list (its exact spelling),
@@ -63,9 +64,9 @@ with an apostrophe as `printf 'Name\047s Network' | swamp vault put <vault> wifi
 | `idle` | panel | a `draw` record; hands the screen back |
 
 Pass `ssid` and `password` to `configure` as `${{ vault.get(...) }}` from a
-workflow; both are sensitive. `send` refuses a `config set` carrying `ssid` or
-`pass` (it would log them); `config set` with only `profile` or `api` still goes
-through `send`. USB has no authentication: whoever holds the cable can
+workflow; both are sensitive. `send` and `write` refuse a `config set` carrying
+`ssid` or `pass` (they would record them), and `send` refuses line breaks;
+`config set` with only `profile` or `api` still goes through `send`. USB has no authentication: whoever holds the cable can
 reconfigure or reset the panel, but cannot read credentials back.
 
 ## Line commands

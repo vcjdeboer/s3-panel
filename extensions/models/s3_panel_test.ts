@@ -65,6 +65,7 @@ Deno.test("the panel inherits the whole base and adds exactly the screen methods
     "clear",
     "drain",
     "fill",
+    "idle",
     "listen",
     "logo",
     "profile",

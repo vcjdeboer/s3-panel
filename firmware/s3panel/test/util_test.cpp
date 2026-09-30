@@ -88,6 +88,51 @@ int main() {
   CHECK_STR(joinReasonText(205), "refused by the router");
   CHECK_STR(joinReasonText(8), "reason 8");
 
+  // Touch debouncing: the controller drops out for a few ms mid-press.
+  {
+    TapFilter f;  // a clean 100 ms tap: one TAP once the finger has been up 120 ms
+    CHECK(tapFilterFeed(f, true, 1000) == TOUCH_NONE);
+    CHECK(tapFilterFeed(f, true, 1100) == TOUCH_NONE);
+    CHECK(tapFilterFeed(f, false, 1150) == TOUCH_NONE);
+    CHECK(tapFilterFeed(f, false, 1225) == TOUCH_TAP);
+    CHECK(tapFilterFeed(f, false, 1400) == TOUCH_NONE);
+  }
+  {
+    TapFilter f;  // one press with dropouts is still one tap
+    int taps = 0;
+    const bool pattern[] = {1, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1};  // 20 ms steps
+    for (int i = 0; i < 11; i++) taps += tapFilterFeed(f, pattern[i], 2000 + i * 20) == TOUCH_TAP;
+    for (uint32_t t = 2220; t < 2600; t += 20) taps += tapFilterFeed(f, false, t) == TOUCH_TAP;
+    CHECK(taps == 1);
+  }
+  {
+    TapFilter f;  // a 5 s hold with dropouts: one HOLD, and no tap on release
+    int holds = 0, taps = 0;
+    for (uint32_t t = 0; t <= 5200; t += 20) {
+      TouchEvent e = tapFilterFeed(f, (t / 20) % 7 != 3, t);
+      holds += e == TOUCH_HOLD;
+      taps += e == TOUCH_TAP;
+    }
+    for (uint32_t t = 5220; t < 5600; t += 20) taps += tapFilterFeed(f, false, t) == TOUCH_TAP;
+    CHECK(holds == 1);
+    CHECK(taps == 0);
+  }
+  {
+    TapFilter f;  // two real taps 400 ms apart are two taps
+    int taps = 0;
+    for (uint32_t t = 0; t < 1000; t += 20) {
+      bool on = (t < 100) || (t >= 400 && t < 500);
+      taps += tapFilterFeed(f, on, t) == TOUCH_TAP;
+    }
+    CHECK(taps == 2);
+  }
+  {
+    TapFilter f;  // a 1.5 s press is neither a tap nor a hold
+    int events = 0;
+    for (uint32_t t = 0; t < 2000; t += 20) events += tapFilterFeed(f, t < 1500, t) != TOUCH_NONE;
+    CHECK(events == 0);
+  }
+
   randomPassword(counter, b, 8);
   CHECK_STR(b, "abcdefgh");
   randomPassword(counter, b, 31);

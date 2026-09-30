@@ -155,7 +155,7 @@ const EventsSchema = z.object({
 const DrawSchema = z.object({
   command: z.string().describe("The command line sent, without the newline"),
   operation: z.string().describe(
-    "Which drawing method ran: text, fill, clear or backlight",
+    "Which drawing method ran: text, fill, clear, backlight, logo or idle",
   ),
   result: z.record(z.string(), z.unknown()).describe(
     "The JSON object the board answered with",
@@ -598,6 +598,22 @@ export const model = {
   },
   methods: {
     ...baseMethods(),
+
+    idle: {
+      description:
+        "Hand the screen back to the firmware (s3panel 0.12): the badge, " +
+        "setup or connecting screen. The firmware also does this by itself " +
+        "5 minutes after the last host command.",
+      arguments: z.object({
+        timeoutMs: z.number().int().positive().optional().describe(
+          "Overrides the instance's timeoutMs for this call",
+        ),
+      }),
+      execute: async (args: { timeoutMs?: number }, ctx: MethodContext) => {
+        const timeoutMs = args.timeoutMs ?? ctx.globalArgs.timeoutMs;
+        return await draw(ctx, "idle", "idle", timeoutMs);
+      },
+    },
 
     profile: {
       description:

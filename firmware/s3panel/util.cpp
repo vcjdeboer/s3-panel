@@ -191,6 +191,27 @@ void htmlEscape(const char *in, char *out, size_t cap) {
   out[k] = '\0';
 }
 
+TouchEvent tapFilterFeed(TapFilter &f, bool touching, uint32_t now) {
+  if (touching) {
+    if (!f.down) {
+      f.down = true;
+      f.held = false;
+      f.pressMs = now;
+    }
+    f.lastSeenMs = now;
+    if (!f.held && now - f.pressMs >= TAP_HOLD_MS) {
+      f.held = true;
+      return TOUCH_HOLD;
+    }
+    return TOUCH_NONE;
+  }
+  if (f.down && now - f.lastSeenMs >= TAP_RELEASE_MS) {
+    f.down = false;
+    if (!f.held && f.lastSeenMs - f.pressMs < TAP_MAX_MS) return TOUCH_TAP;
+  }
+  return TOUCH_NONE;
+}
+
 const char *joinReasonText(int reason) {
   static char other[16];
   switch (reason) {

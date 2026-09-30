@@ -24,6 +24,22 @@ bool validUsername(const char *s);
 // WIFI:T:WPA;S:<ssid>;P:<pass>;; with \ ; , : " escaped.
 void wifiQrText(const char *ssid, const char *pass, char *out, size_t cap);
 void htmlEscape(const char *in, char *out, size_t cap);
+// Touch debouncing. The controller reports "no finger" for a few ms mid-press,
+// so a release counts only after TAP_RELEASE_MS without contact. A press of
+// under TAP_MAX_MS is a TAP (reported at release); TAP_HOLD_MS of contact is
+// one HOLD (reported while still held), and its release is no tap.
+enum TouchEvent { TOUCH_NONE, TOUCH_TAP, TOUCH_HOLD };
+const uint32_t TAP_RELEASE_MS = 120;
+const uint32_t TAP_MAX_MS = 1000;
+const uint32_t TAP_HOLD_MS = 5000;
+struct TapFilter {
+  bool down = false;
+  bool held = false;
+  uint32_t pressMs = 0;
+  uint32_t lastSeenMs = 0;
+};
+TouchEvent tapFilterFeed(TapFilter &f, bool touching, uint32_t nowMs);
+
 // Why a Wi-Fi join failed, from ESP-IDF's disconnect reason (0: no reason
 // seen). The returned text is valid until the next call.
 const char *joinReasonText(int reason);

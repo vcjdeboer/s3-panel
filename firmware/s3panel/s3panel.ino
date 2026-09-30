@@ -56,6 +56,7 @@
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 
+#include "badge_ui.h"
 #include "config.h"
 #include "device_state.h"
 #include "net.h"
@@ -113,6 +114,9 @@ static void latchTouch(int x, int y) {
 
 static DevState devState = ST_CONNECTING;
 static PanelConfig cfg;
+static void showState();
+static void enterSetup();  // defined with the setup state
+static void leaveSetup();  // defined with the setup state
 
 static const char *stateName(DevState s) {
   switch (s) {
@@ -161,6 +165,7 @@ static void handleConfig(const String &arg) {
     configLoad(cfg);
     profileBegin(cfg.api, "");
     devState = ST_CONNECTING;
+    showState();
     Serial.println("{\"ok\":true,\"forgotten\":true}");
     return;
   }
@@ -238,6 +243,40 @@ static void handleConfig(const String &arg) {
   d["joined"] = joined || netConnected();
   serializeJson(d, Serial);
   Serial.println();
+}
+
+
+static DevState beforeHost = ST_CONNECTING;
+static unsigned long lastHostMs = 0;
+static const unsigned long HOST_IDLE_MS = 5UL * 60 * 1000;
+
+static bool drawsOrWaits(const String &cmd) {
+  return cmd == "text" || cmd == "clear" || cmd == "fill" || cmd == "logo" ||
+         cmd == "backlight" || cmd == "touchgame" || cmd == "waittouch" || cmd == "screen";
+}
+
+// Redraw whatever the current non-host state shows.
+static void showState() {
+  if (!displayOk) return;
+  if (devState == ST_CONNECTING) uiConnecting();
+  else if (devState == ST_BADGE) uiBadgeEnter();
+}
+
+static void enterHost() {
+  if (devState != ST_HOST) {
+    beforeHost = devState;
+    devState = ST_HOST;
+    setBacklightPct(100);  // a later `backlight off` still wins
+  }
+  lastHostMs = millis();
+}
+
+static void leaveHost() {
+  if (devState != ST_HOST) return;
+  devState = beforeHost;
+  logoMode = false;
+  gameMode = false;
+  showState();
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -793,8 +832,10 @@ static void handle(const String &lineIn) {
     arg = lineIn.substring(sp + 1);
   }
 
-  // any command exits logo/game mode (except touch reads, which the host may poll)
-  if (cmd != "touch" && cmd != "touchstate" && cmd != "touchgame" && cmd != "events") {
+  if (devState == ST_HOST) lastHostMs = millis();
+  // A command that draws or waits hands the screen to the host.
+  if (drawsOrWaits(cmd)) {
+    enterHost();
     logoMode = false;
     gameMode = false;
   }
@@ -1002,6 +1043,11 @@ static void handle(const String &lineIn) {
     handleConfig(arg);
     return;
   }
+  if (cmd == "idle") {
+    leaveHost();
+    Serial.printf("{\"ok\":true,\"state\":\"%s\"}\n", stateName(devState));
+    return;
+  }
   if (cmd == "profile") {
     if (arg == "status") {
       profileStatusJson(Serial);
@@ -1027,7 +1073,7 @@ void setup() {
   displayOk = gfx->begin();
   if (displayOk) {
     drawLogo();
-    logoMode = true;
+    logoMode = false;
   }
   setBacklight(true);
 
@@ -1048,6 +1094,8 @@ void setup() {
   configLoad(cfg);
   profileBegin(cfg.api, cfg.profile);
   netBegin(cfg.ssid, cfg.pass);
+  devState = profileHave() ? ST_BADGE : ST_CONNECTING;
+  showState();
 
   Serial.printf("{\"ok\":%s,\"fw\":\"%s\",\"display\":%s,\"touch\":%s,\"psram\":%u,\"state\":\"%s\"}\n",
                 displayOk ? "true" : "false", FW, displayOk ? "true" : "false",
@@ -1066,31 +1114,56 @@ void loop() {
     }
   }
 
+  unsigned long now = millis();
   netLoop();
+  if (devState == ST_HOST && now - lastHostMs > HOST_IDLE_MS) leaveHost();
+  if (devState == ST_CONNECTING && netConnected()) {
+    devState = ST_BADGE;
+    if (displayOk) uiBadgeEnter();
+  }
   profileLoop(netConnected(), devState != ST_HOST && devState != ST_SETUP);
-  if (devState == ST_CONNECTING && netConnected()) devState = ST_BADGE;
+  if (devState == ST_BADGE && displayOk) uiBadgeLoop();
 
-  // Poll touch every cycle: latch it so the host never misses one.
+  // Touch: latch every press as before; badge taps and the setup hold come
+  // from the debounced filter, since the controller drops out mid-press.
   static bool wasTouching = false;
+  static TapFilter tapFilter;  // debounced taps and holds (see util.h)
+  static int pressX = 0, pressY = 0;
   if (touchOk) {
     int tx, ty, gesture;
     bool touching = readTouch(&tx, &ty, &gesture);
     if (touching && !wasTouching) {
       latchTouch(tx, ty);
+      pressX = tx;
+      pressY = ty;
       if (eventsOn) {
         Serial.printf("{\"event\":\"tap\",\"n\":%u,\"x\":%d,\"y\":%d,\"t\":%lu}\n",
                       touchCount, tx, ty, touchLastMs);
       }
-      if (logoMode && displayOk) {
+      if (devState == ST_HOST && logoMode && displayOk) {
         spawnExplosion(tx, ty);
         runExplosion();
         drawLogo();
       }
     }
+    TouchEvent ev = tapFilterFeed(tapFilter, touching, millis());
+    if (ev == TOUCH_TAP && displayOk) {
+      if (devState == ST_BADGE) {
+        profileNoteTap();
+        if (!uiBadgeTap()) {
+          spawnExplosion(pressX, pressY);
+          runExplosion();
+          uiBadgeEnter();
+        }
+      } else if (devState == ST_CONNECTING) {
+        spawnExplosion(pressX, pressY);
+        runExplosion();
+        uiConnecting();
+      }
+    }
     wasTouching = touching;
   }
 
-  // Game mode: redraw the counter when it changes.
   if (gameMode && displayOk && touchCount != gameDisplayedCount) {
     drawGameScreen(touchCount);
   }

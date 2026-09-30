@@ -5,6 +5,7 @@
 #include "net.h"
 #include "panel.h"
 #include "profile.h"
+#include "qrcode.h"
 #include "util.h"
 
 enum UiView { VIEW_LOGO, VIEW_PROFILE, VIEW_BADGES, VIEW_ACTIVITY };
@@ -204,5 +205,77 @@ void uiHello(const Profile &p) {
   formatThousands(p.points, num, sizeof num);
   centered(250, 4, CYAN_TXT, num);
   centered(290, 2, CYAN_DIM, "points");
+  gfx->flush();
+}
+
+static int qrX, qrY, qrBox;
+
+static void qrDraw(esp_qrcode_handle_t q) {
+  int n = esp_qrcode_get_size(q);
+  int scale = qrBox / (n + 8);  // 4 modules of quiet zone each side
+  if (scale < 1) scale = 1;
+  int side = scale * (n + 8);
+  int ox = qrX + (qrBox - side) / 2, oy = qrY + (qrBox - side) / 2;
+  gfx->fillRect(ox, oy, side, side, RGB565_WHITE);
+  for (int y = 0; y < n; y++)
+    for (int x = 0; x < n; x++)
+      if (esp_qrcode_get_module(q, x, y))
+        gfx->fillRect(ox + (x + 4) * scale, oy + (y + 4) * scale, scale, scale, RGB565_BLACK);
+}
+
+static void drawQr(const char *text, int x, int y, int box) {
+  qrX = x;
+  qrY = y;
+  qrBox = box;
+  esp_qrcode_config_t cfg = {};
+  cfg.display_func = qrDraw;
+  cfg.max_qrcode_version = 10;
+  cfg.qrcode_ecc_level = ESP_QRCODE_ECC_MED;
+  esp_qrcode_generate(&cfg, text);
+}
+
+static void setupHeader(const char *step) {
+  setLevel(100);
+  view = VIEW_LOGO;
+  gfx->fillScreen(RGB565_BLACK);
+  textAt(10, 12, 3, CYAN_TXT, "SET UP");
+  textAt(10, 52, 2, PINK_TXT, step);
+}
+
+void uiSetupJoin(const char *apSsid, const char *apPass) {
+  char qr[128], buf[48];
+  setupHeader("1 - scan to join");
+  wifiQrText(apSsid, apPass, qr, sizeof qr);
+  drawQr(qr, 30, 80, 260);
+  snprintf(buf, sizeof buf, "network  %s", apSsid);
+  textAt(10, 360, 2, RGB565_WHITE, buf);
+  snprintf(buf, sizeof buf, "password %s", apPass);
+  textAt(10, 390, 2, RGB565_WHITE, buf);
+  centered(440, 1, CYAN_DIM, "or join that network by hand");
+  gfx->flush();
+}
+
+void uiSetupOpen() {
+  setupHeader("2 - scan to set up");
+  drawQr("http://192.168.4.1/", 30, 80, 260);
+  centered(370, 2, RGB565_WHITE, "or open 192.168.4.1");
+  centered(440, 1, CYAN_DIM, "or tap this network in Wi-Fi settings");
+  gfx->flush();
+}
+
+void uiSetupChecking(const char *ssid) {
+  setupHeader("checking...");
+  centered(200, 2, RGB565_WHITE, "joining");
+  centered(230, 2, CYAN_TXT, ssid);
+  centered(270, 2, RGB565_WHITE, "and finding your");
+  centered(300, 2, RGB565_WHITE, "swamp profile");
+  gfx->flush();
+}
+
+void uiSetupError(const char *line1, const char *line2) {
+  setupHeader("not yet");
+  centered(200, 2, PINK_TXT, line1);
+  centered(230, 2, RGB565_WHITE, line2);
+  centered(300, 2, CYAN_DIM, "fix it on your phone");
   gfx->flush();
 }

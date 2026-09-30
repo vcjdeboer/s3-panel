@@ -8,3 +8,7 @@ void uiBadgeLoop();    // back to logo after 30 s; dim; redraw on new data
 bool uiBadgeOnLogo();
 void uiConnecting();
 void uiHello(const Profile &p);
+void uiSetupJoin(const char *apSsid, const char *apPass);
+void uiSetupOpen();
+void uiSetupChecking(const char *ssid);
+void uiSetupError(const char *line1, const char *line2);

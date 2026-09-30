@@ -10,8 +10,9 @@ enum FetchResult { FETCH_NONE, FETCH_OK, FETCH_NOT_FOUND, FETCH_CONNECT, FETCH_H
 FetchResult profileFetch(const char *api, const char *username, Profile &out, int &httpCode);
 void profileBegin(const char *api, const char *username);  // loads the cache, fetch due now
 void profileAdopt(const Profile &p);                       // a fetch made elsewhere (setup)
-void profileLoop(bool wifiUp, bool mayBlock);              // runs a due fetch
-FetchResult profileRefresh();                              // fetch now
+void profileLoop(bool wifiUp, bool mayFetch);              // starts a due fetch in the background, adopts a finished one
+FetchResult profileRefresh();                              // fetch now (blocking)
+bool profileWaitIdle(uint32_t timeoutMs);  // before any synchronous profileFetch
 void profileNoteTap();                                     // fetch on the next loop if stale
 bool profileHave();
 const Profile &profileData();

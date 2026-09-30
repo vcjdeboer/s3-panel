@@ -74,8 +74,20 @@ void netApStop() {
 
 int netApClients() { return WiFi.softAPgetStationNum(); }
 
-int netScan(char names[][33], int max) {
-  int n = WiFi.scanNetworks();
+static int collect(int n, char names[][33], int max);
+
+int netScan(char names[][33], int max) { return collect(WiFi.scanNetworks(), names, max); }
+
+void netScanStart() { WiFi.scanNetworks(true); }
+
+int netScanCollect(char names[][33], int max) {
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) return -1;
+  if (n < 0) return 0;  // failed or not started
+  return collect(n, names, max);
+}
+
+static int collect(int n, char names[][33], int max) {
   int count = 0;
   while (count < max) {
     int best = -1;

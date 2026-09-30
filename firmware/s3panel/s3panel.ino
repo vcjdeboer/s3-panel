@@ -55,11 +55,13 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
+#include <esp_random.h>
 
 #include "badge_ui.h"
 #include "config.h"
 #include "device_state.h"
 #include "net.h"
+#include "portal.h"
 #include "profile.h"
 #include "panel.h"
 #include "util.h"
@@ -117,6 +119,9 @@ static PanelConfig cfg;
 static void showState();
 static void enterSetup();  // defined with the setup state
 static void leaveSetup();  // defined with the setup state
+static char apSsid[16], apPass[9];
+static bool setupShowingOpen = false;
+static unsigned long setupDoneMs = 0;
 
 static const char *stateName(DevState s) {
   switch (s) {
@@ -164,9 +169,11 @@ static void handleConfig(const String &arg) {
     WiFi.disconnect(true);
     configLoad(cfg);
     profileBegin(cfg.api, "");
-    devState = ST_CONNECTING;
-    showState();
+    // Answer first: entering setup starts the hotspot and scans (2-4 s).
     Serial.println("{\"ok\":true,\"forgotten\":true}");
+    Serial.flush();
+    portalEnd();
+    enterSetup();
     return;
   }
   if (sub != "set") {
@@ -205,6 +212,7 @@ static void handleConfig(const String &arg) {
       replyError("unreachable");
       return;
     }
+    profileWaitIdle(30000);
     memset(&fetched, 0, sizeof fetched);
     int code = 0;
     FetchResult r = profileFetch(api && api[0] ? api : cfg.api, profile, fetched, code);
@@ -241,6 +249,7 @@ static void handleConfig(const String &arg) {
     if (profile) profileAdopt(fetched);
   }
   d["joined"] = joined || netConnected();
+  if (devState == ST_SETUP && configComplete(cfg)) leaveSetup();
   serializeJson(d, Serial);
   Serial.println();
 }
@@ -258,6 +267,11 @@ static bool drawsOrWaits(const String &cmd) {
 // Redraw whatever the current non-host state shows.
 static void showState() {
   if (!displayOk) return;
+  if (devState == ST_SETUP) {
+    if (setupShowingOpen) uiSetupOpen();
+    else uiSetupJoin(apSsid, apPass);
+    return;
+  }
   if (devState == ST_CONNECTING) uiConnecting();
   else if (devState == ST_BADGE) uiBadgeEnter();
 }
@@ -276,6 +290,25 @@ static void leaveHost() {
   devState = beforeHost;
   logoMode = false;
   gameMode = false;
+  showState();
+}
+
+static void enterSetup() {
+  devState = ST_SETUP;
+  setupShowingOpen = false;
+  setupDoneMs = 0;
+  netApName(apSsid, sizeof apSsid);
+  randomPassword(esp_random, apPass, 8);
+  netApStart(apSsid, apPass);
+  portalBegin();
+  if (displayOk) uiSetupJoin(apSsid, apPass);
+}
+
+static void leaveSetup() {
+  portalEnd();
+  netApStop();
+  configLoad(cfg);
+  devState = (netConnected() || profileHave()) ? ST_BADGE : ST_CONNECTING;
   showState();
 }
 
@@ -1043,6 +1076,10 @@ static void handle(const String &lineIn) {
     handleConfig(arg);
     return;
   }
+  if (cmd == "setup" && arg == "status") {
+    portalStatusJson(Serial);
+    return;
+  }
   if (cmd == "idle") {
     leaveHost();
     Serial.printf("{\"ok\":true,\"state\":\"%s\"}\n", stateName(devState));
@@ -1094,8 +1131,12 @@ void setup() {
   configLoad(cfg);
   profileBegin(cfg.api, cfg.profile);
   netBegin(cfg.ssid, cfg.pass);
-  devState = profileHave() ? ST_BADGE : ST_CONNECTING;
-  showState();
+  if (!configComplete(cfg)) {
+    enterSetup();
+  } else {
+    devState = profileHave() ? ST_BADGE : ST_CONNECTING;
+    showState();
+  }
 
   Serial.printf("{\"ok\":%s,\"fw\":\"%s\",\"display\":%s,\"touch\":%s,\"psram\":%u,\"state\":\"%s\"}\n",
                 displayOk ? "true" : "false", FW, displayOk ? "true" : "false",
@@ -1122,6 +1163,24 @@ void loop() {
     if (displayOk) uiBadgeEnter();
   }
   profileLoop(netConnected(), devState != ST_HOST && devState != ST_SETUP);
+  if (devState == ST_SETUP) {
+    portalLoop();
+    PortalPhase ph = portalPhase();
+    if (ph == PORTAL_DONE) {
+      if (!setupDoneMs) {
+        setupDoneMs = millis();
+        if (displayOk) uiHello(profileData());
+      } else if (millis() - setupDoneMs > 10000) {  // time for the phone to load "Done"
+        leaveSetup();
+      }
+    } else if (ph == PORTAL_IDLE) {
+      bool open = netApClients() > 0;
+      if (open != setupShowingOpen) {
+        setupShowingOpen = open;
+        showState();
+      }
+    }
+  }
   if (devState == ST_BADGE && displayOk) uiBadgeLoop();
 
   // Touch: latch every press as before; badge taps and the setup hold come
@@ -1147,6 +1206,8 @@ void loop() {
       }
     }
     TouchEvent ev = tapFilterFeed(tapFilter, touching, millis());
+    bool holdable = devState == ST_CONNECTING || (devState == ST_BADGE && uiBadgeOnLogo());
+    if (ev == TOUCH_HOLD && holdable) enterSetup();
     if (ev == TOUCH_TAP && displayOk) {
       if (devState == ST_BADGE) {
         profileNoteTap();

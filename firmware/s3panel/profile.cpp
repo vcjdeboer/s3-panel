@@ -106,7 +106,40 @@ void profileAdopt(const Profile &p) {
   generation++;
 }
 
+// Scheduled fetches run on a worker task (core 0), because a fetch takes ~11 s
+// on this board and the loop must keep answering USB and touch meanwhile. The
+// worker only writes `bgOut`/`bgResult`/`bgCode` and then sets `bgReady`; the
+// loop adopts the result if it is still for the current settings (epoch).
+// Synchronous fetches (profileRefresh, config set, setup) first wait for the
+// worker to be idle, since profileFetch's buffers are shared.
+static TaskHandle_t worker = nullptr;
+static volatile bool bgBusy = false;
+static volatile bool bgReady = false;
+static Profile bgOut;
+static FetchResult bgResult = FETCH_NONE;
+static int bgCode = 0;
+static char bgApi[96], bgUser[40];  // the worker's own copies
+static uint32_t epoch = 0;          // bumped by profileBegin: older results are dropped
+static volatile uint32_t bgEpoch = 0;
+
+static void workerTask(void *) {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    bgResult = profileFetch(bgApi, bgUser, bgOut, bgCode);
+    bgReady = true;
+    bgBusy = false;
+  }
+}
+
+bool profileWaitIdle(uint32_t timeoutMs) {
+  unsigned long t0 = millis();
+  while (bgBusy && millis() - t0 < timeoutMs) delay(20);
+  return !bgBusy;
+}
+
 void profileBegin(const char *apiBase, const char *username) {
+  if (!worker) xTaskCreatePinnedToCore(workerTask, "profile", 16384, nullptr, 1, &worker, 0);
+  epoch++;  // a fetch still running for the old settings is discarded
   strlcpy(api, apiBase, sizeof api);
   strlcpy(user, username, sizeof user);
   memset(&current, 0, sizeof current);
@@ -120,13 +153,12 @@ void profileBegin(const char *apiBase, const char *username) {
   generation++;
 }
 
-static FetchResult runFetch() {
-  static Profile next;
-  lastAttemptMs = millis();
-  FetchResult r = profileFetch(api, user, next, lastCode);
+// What a finished fetch means for the schedule, whichever way it ran.
+static void settle(FetchResult r, const Profile &fresh, int code) {
+  lastCode = code;
   if (r == FETCH_OK) {
-    profileAdopt(next);
-    return r;
+    profileAdopt(fresh);
+    return;
   }
   last = r;
   if (r == FETCH_NOT_FOUND) {
@@ -136,18 +168,28 @@ static FetchResult runFetch() {
     if (backoffIdx < 3) backoffIdx++;
   }
   generation++;  // the footer note changes
-  return r;
 }
 
-void profileLoop(bool wifiUp, bool mayBlock) {
-  if (!user[0] || stopped || !wifiUp || !mayBlock) return;
+void profileLoop(bool wifiUp, bool mayFetch) {
+  if (bgReady) {
+    bgReady = false;
+    if (bgEpoch == epoch) settle(bgResult, bgOut, bgCode);
+  }
+  if (!user[0] || stopped || !wifiUp || !mayFetch || bgBusy || !worker) return;
   unsigned long now = millis();
   bool due = (long)(now - nextDueMs) >= 0;
   if (tapWanted) {
     tapWanted = false;
     if ((!have || now - lastOkMs > STALE_ON_TAP_MS) && now - lastAttemptMs > MIN_TAP_GAP_MS) due = true;
   }
-  if (due) runFetch();
+  if (!due) return;
+  lastAttemptMs = now;
+  nextDueMs = now + REFRESH_MS;  // settle() sets the real next time
+  strlcpy(bgApi, api, sizeof bgApi);
+  strlcpy(bgUser, user, sizeof bgUser);
+  bgEpoch = epoch;
+  bgBusy = true;
+  xTaskNotifyGive(worker);
 }
 
 FetchResult profileRefresh() {
@@ -160,7 +202,17 @@ FetchResult profileRefresh() {
     generation++;
     return last;
   }
-  return runFetch();
+  profileWaitIdle(30000);
+  if (bgReady) {  // a background fetch just finished: take it first
+    bgReady = false;
+    if (bgEpoch == epoch) settle(bgResult, bgOut, bgCode);
+  }
+  static Profile next;
+  int code = 0;
+  lastAttemptMs = millis();
+  FetchResult r = profileFetch(api, user, next, code);
+  settle(r, next, code);
+  return r;
 }
 
 void profileNoteTap() { tapWanted = true; }

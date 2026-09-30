@@ -43,14 +43,17 @@ Deno.test("the panel inherits the whole base and adds exactly the screen methods
   const names = Object.keys(model.methods).sort();
   // Inherited from the shared base, unchanged.
   const base = [
+    "configure",
     "detect",
     "flash",
+    "forget",
     "hold",
     "ping",
     "read",
     "release",
     "send",
     "status",
+    "wifi",
     "write",
   ];
   // Added here: drawing, events, touch, touch screens and approvals.

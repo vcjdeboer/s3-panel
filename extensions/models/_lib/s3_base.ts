@@ -178,6 +178,89 @@ export const FlashSchema = z.object({
   elapsedMs: z.number(),
 });
 
+/** The board's Wi-Fi link as it reports it. Never carries a credential. */
+export const WifiSchema = z.object({
+  state: z.string().describe(
+    "The firmware's own state name (s3panel: setup, connecting, badge, host)",
+  ),
+  connected: z.boolean(),
+  ip: z.string(),
+  rssi: z.number(),
+  mac: z.string().describe("The station MAC"),
+  outcome: OUTCOME,
+  observedAt: z.iso.datetime(),
+  elapsedMs: z.number(),
+});
+
+/** A change to the board's stored settings: which keys, never their values. */
+export const ConfigSchema = z.object({
+  operation: z.enum(["configure", "forget"]),
+  stored: z.array(z.string()).describe("Names of the keys the board stored"),
+  joined: z.boolean().nullable().describe(
+    "Whether the board is on Wi-Fi afterwards; null when it did not say",
+  ),
+  forgotten: z.boolean(),
+  error: z.string().nullable().describe("The board's reason for refusing"),
+  outcome: OUTCOME,
+  observedAt: z.iso.datetime(),
+  elapsedMs: z.number(),
+});
+
+/**
+ * A Wi-Fi password the board accepts: empty for an open network, else 8 to 63
+ * characters. Sensitive: pass it from a vault expression, never inline.
+ */
+export const WifiPasswordSchema = z.string().max(63).refine(
+  (p) => p.length === 0 || p.length >= 8,
+  "a Wi-Fi password is empty (open network) or 8 to 63 characters",
+).meta({
+  sensitive: true,
+  description:
+    "Wi-Fi password; use ${{ vault.get(<vault>, <key>) }}, never a literal",
+});
+
+/**
+ * The `config set` line for Wi-Fi credentials. JSON keeps quotes, spaces,
+ * separators and even newlines inside one protocol line, byte for byte.
+ */
+export function configureLine(ssid: string, password: string): string {
+  return "config set " + JSON.stringify({ ssid, pass: password });
+}
+
+type Reply = Record<string, unknown> | null;
+
+/** The Wi-Fi fields of a `wifi status` reply, with defaults. */
+export function wifiFields(response: Reply) {
+  const r = response ?? {};
+  return {
+    state: typeof r.state === "string" ? r.state : "",
+    connected: r.connected === true,
+    ip: typeof r.ip === "string" ? r.ip : "",
+    rssi: typeof r.rssi === "number" ? r.rssi : 0,
+    mac: typeof r.mac === "string" ? r.mac : "",
+  };
+}
+
+const CONFIG_KEYS = ["ssid", "pass", "profile", "api"];
+
+/**
+ * The fields of a `config` reply worth recording. A whitelist: whatever else a
+ * board might say is dropped, so a value can never leak into the datastore.
+ */
+export function configFields(response: Reply) {
+  const r = response ?? {};
+  return {
+    stored: Array.isArray(r.stored)
+      ? r.stored.filter((s): s is string =>
+        typeof s === "string" && CONFIG_KEYS.includes(s)
+      )
+      : [],
+    joined: typeof r.joined === "boolean" ? r.joined : null,
+    forgotten: r.forgotten === true,
+    error: typeof r.error === "string" ? r.error : null,
+  };
+}
+
 /** The resource specs every S3 model type shares. */
 export function baseResources(): Record<string, unknown> {
   return {
@@ -216,6 +299,17 @@ export function baseResources(): Record<string, unknown> {
     "flash": {
       description: "One arduino-cli compile + upload cycle and its result",
       schema: FlashSchema,
+      ...EVIDENTIARY,
+    },
+    "wifi": {
+      description: "The board's Wi-Fi link: state, connected, address, signal",
+      schema: WifiSchema,
+      ...OBSERVATIONAL,
+    },
+    "config": {
+      description:
+        "A change to the board's stored settings (names of keys, never values)",
+      schema: ConfigSchema,
       ...EVIDENTIARY,
     },
   };
@@ -351,6 +445,165 @@ export function baseMethods(): Record<string, unknown> {
       "Read the board's self-reported status and record it. What the fields " +
         "mean is up to the firmware.",
     ),
+
+    wifi: {
+      description:
+        "Ask the board for its Wi-Fi link: its state, whether it is connected, " +
+        "its address and signal. Records wifi-latest. Never reports a credential.",
+      arguments: z.object({
+        timeoutMs: z.number().int().positive().optional().describe(
+          "Overrides the instance's timeoutMs for this call",
+        ),
+      }),
+      execute: async (args: { timeoutMs?: number }, ctx: MethodContext) => {
+        const timeoutMs = args.timeoutMs ?? ctx.globalArgs.timeoutMs;
+        const t0 = performance.now();
+        const r = await sendLine(ctx, "wifi status", timeoutMs);
+        const outcome = !r.response
+          ? "timeout"
+          : (replyFailed(r.response) ? "error" : "ok");
+        const fields = wifiFields(r.response);
+        ctx.logger.info("wifi: {outcome} state={state} connected={connected}", {
+          outcome,
+          state: fields.state,
+          connected: fields.connected,
+        });
+        const handle = await ctx.writeResource("wifi", "wifi-latest", {
+          ...fields,
+          outcome,
+          observedAt: new Date().toISOString(),
+          elapsedMs: Math.round(performance.now() - t0),
+        });
+        if (!r.response) {
+          throw new Error(
+            `no reply to wifi status within ${timeoutMs} ms ` +
+              "(recorded as wifi-latest, outcome=timeout)",
+          );
+        }
+        if (outcome === "error") {
+          throw new Error(
+            `the board refused wifi status: ${
+              JSON.stringify(r.response.error ?? "no reason given")
+            } (firmware older than s3panel 0.12?)`,
+          );
+        }
+        return { dataHandles: [handle] };
+      },
+    },
+
+    configure: {
+      description:
+        "Store Wi-Fi credentials on the board over USB. The board joins the " +
+        "network before saving and refuses (error=join) if it cannot, so a " +
+        "wrong password never replaces a working one. Pass the password from " +
+        "a vault expression; it is never recorded or logged.",
+      arguments: z.object({
+        ssid: z.string().min(1).max(32).describe("Wi-Fi network name"),
+        password: WifiPasswordSchema,
+        joinMs: z.number().int().positive().default(30_000).describe(
+          "Wait for the board to join and answer; named joinMs so the global " +
+            "timeoutMs does not clobber this default",
+        ),
+      }),
+      execute: async (
+        args: { ssid: string; password: string; joinMs: number },
+        ctx: MethodContext,
+      ) => {
+        const t0 = performance.now();
+        const r = await sendLine(
+          ctx,
+          configureLine(args.ssid, args.password),
+          args.joinMs,
+        );
+        const outcome = !r.response
+          ? "timeout"
+          : (replyFailed(r.response) ? "error" : "ok");
+        const fields = configFields(r.response);
+        ctx.logger.info(
+          "configure: {outcome} stored={stored} joined={joined}",
+          {
+            outcome,
+            stored: fields.stored.join(","),
+            joined: fields.joined,
+          },
+        );
+        const handle = await ctx.writeResource("config", "config-latest", {
+          operation: "configure",
+          ...fields,
+          outcome,
+          observedAt: new Date().toISOString(),
+          elapsedMs: Math.round(performance.now() - t0),
+        });
+        if (!r.response) {
+          throw new Error(
+            `no reply to config set within ${args.joinMs} ms ` +
+              "(recorded as config-latest, outcome=timeout)",
+          );
+        }
+        if (outcome === "error") {
+          throw new Error(
+            "the board did not store the Wi-Fi settings: " +
+              `${
+                fields.error ?? "no reason given"
+              } (recorded as config-latest)`,
+          );
+        }
+        return { dataHandles: [handle] };
+      },
+    },
+
+    forget: {
+      description:
+        "Factory-reset the board's stored settings (Wi-Fi and anything else " +
+        "the firmware keeps) so it boots into setup. Refuses unless confirm=true.",
+      arguments: z.object({
+        confirm: z.boolean().default(false).describe(
+          "Must be true: this wipes the board's settings",
+        ),
+        timeoutMs: z.number().int().positive().optional().describe(
+          "Overrides the instance's timeoutMs for this call",
+        ),
+      }),
+      execute: async (
+        args: { confirm: boolean; timeoutMs?: number },
+        ctx: MethodContext,
+      ) => {
+        if (!args.confirm) {
+          throw new Error(
+            "forget wipes the board's stored settings; pass --input confirm=true to do it",
+          );
+        }
+        const timeoutMs = args.timeoutMs ?? ctx.globalArgs.timeoutMs;
+        const t0 = performance.now();
+        const r = await sendLine(ctx, "config forget", timeoutMs);
+        const outcome = !r.response
+          ? "timeout"
+          : (replyFailed(r.response) ? "error" : "ok");
+        const fields = configFields(r.response);
+        ctx.logger.info("forget: {outcome}", { outcome });
+        const handle = await ctx.writeResource("config", "config-latest", {
+          operation: "forget",
+          ...fields,
+          outcome,
+          observedAt: new Date().toISOString(),
+          elapsedMs: Math.round(performance.now() - t0),
+        });
+        if (!r.response) {
+          throw new Error(
+            `no reply to config forget within ${timeoutMs} ms ` +
+              "(recorded as config-latest, outcome=timeout)",
+          );
+        }
+        if (outcome === "error") {
+          throw new Error(
+            `the board refused config forget: ${
+              fields.error ?? "no reason given"
+            }`,
+          );
+        }
+        return { dataHandles: [handle] };
+      },
+    },
 
     send: {
       description:

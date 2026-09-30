@@ -24,5 +24,8 @@ bool validUsername(const char *s);
 // WIFI:T:WPA;S:<ssid>;P:<pass>;; with \ ; , : " escaped.
 void wifiQrText(const char *ssid, const char *pass, char *out, size_t cap);
 void htmlEscape(const char *in, char *out, size_t cap);
+// Why a Wi-Fi join failed, from ESP-IDF's disconnect reason (0: no reason
+// seen). The returned text is valid until the next call.
+const char *joinReasonText(int reason);
 // Lower-case letters and digits without 0 1 i l o; out needs len + 1 bytes.
 void randomPassword(uint32_t (*rnd)(), char *out, size_t len);

@@ -59,6 +59,7 @@
 #include "config.h"
 #include "device_state.h"
 #include "net.h"
+#include "profile.h"
 #include "panel.h"
 #include "util.h"
 
@@ -158,6 +159,7 @@ static void handleConfig(const String &arg) {
     configForget();
     WiFi.disconnect(true);
     configLoad(cfg);
+    profileBegin(cfg.api, "");
     devState = ST_CONNECTING;
     Serial.println("{\"ok\":true,\"forgotten\":true}");
     return;
@@ -173,8 +175,10 @@ static void handleConfig(const String &arg) {
   }
   const char *ssid = in["ssid"];
   const char *pass = in["pass"] | "";
+  const char *profile = in["profile"];
   const char *api = in["api"];
   if ((ssid && (!ssid[0] || strlen(ssid) > 32)) || !validPass(pass) ||
+      (profile && !validUsername(profile)) ||
       (api && (strlen(api) >= sizeof cfg.api || (api[0] && strncmp(api, "https://", 8) != 0)))) {
     replyError("invalid");
     return;
@@ -182,11 +186,33 @@ static void handleConfig(const String &arg) {
   bool joined = false;
   if (ssid) {
     if (!netJoin(ssid, pass, 20000)) {
+      char why[48];
+      snprintf(why, sizeof why, "join: %s", joinReasonText(netLastReason()));
       netBegin(cfg.ssid, cfg.pass);  // back to the saved network, if any
-      replyError("join");
+      replyError(why);
       return;
     }
     joined = true;
+  }
+  static Profile fetched;
+  if (profile) {
+    if (!netConnected()) {
+      replyError("unreachable");
+      return;
+    }
+    memset(&fetched, 0, sizeof fetched);
+    int code = 0;
+    FetchResult r = profileFetch(api && api[0] ? api : cfg.api, profile, fetched, code);
+    if (r != FETCH_OK) {
+      if (joined) netBegin(cfg.ssid, cfg.pass);
+      char why[48];
+      if (r == FETCH_NOT_FOUND) snprintf(why, sizeof why, "not found");
+      else if (r == FETCH_HTTP) snprintf(why, sizeof why, "unreachable: http %d", code);
+      else if (r == FETCH_PARSE) snprintf(why, sizeof why, "unreachable: parse %s", profileParseNote());
+      else snprintf(why, sizeof why, "unreachable: connect %d", code);
+      replyError(why);
+      return;
+    }
   }
   JsonDocument d;
   d["ok"] = true;
@@ -200,7 +226,15 @@ static void handleConfig(const String &arg) {
     configSaveApi(api);
     stored.add("api");
   }
+  if (profile) {
+    configSaveProfile(profile);
+    stored.add("profile");
+  }
   configLoad(cfg);
+  if (profile || api) {
+    profileBegin(cfg.api, cfg.profile);
+    if (profile) profileAdopt(fetched);
+  }
   d["joined"] = joined || netConnected();
   serializeJson(d, Serial);
   Serial.println();
@@ -939,12 +973,44 @@ static void handle(const String &lineIn) {
     return;
   }
   if (cmd == "wifi") {
-    if (arg == "status") netStatusJson(Serial, stateName(devState));
-    else replyError("wifi status");
+    if (arg == "status") {
+      netStatusJson(Serial, stateName(devState));
+    } else if (arg == "scan") {
+      if (WiFi.getMode() == WIFI_OFF) WiFi.mode(WIFI_STA);
+      int n = WiFi.scanNetworks(false, true);
+      JsonDocument d;
+      d["ok"] = true;
+      d["count"] = n < 0 ? 0 : n;
+      // [ssid, channel, rssi] per network: no nested objects, so a host that
+      // ends a reply at a closing brace still reads it whole.
+      JsonArray nets = d["networks"].to<JsonArray>();
+      for (int i = 0; i < n; i++) {
+        JsonArray o = nets.add<JsonArray>();
+        o.add(WiFi.SSID(i));
+        o.add(WiFi.channel(i));
+        o.add(WiFi.RSSI(i));
+      }
+      WiFi.scanDelete();
+      serializeJson(d, Serial);
+      Serial.println();
+    } else {
+      replyError("wifi status|scan");
+    }
     return;
   }
   if (cmd == "config") {
     handleConfig(arg);
+    return;
+  }
+  if (cmd == "profile") {
+    if (arg == "status") {
+      profileStatusJson(Serial);
+    } else if (arg == "refresh") {
+      profileRefresh();
+      profileStatusJson(Serial);
+    } else {
+      replyError("profile status|refresh");
+    }
     return;
   }
   Serial.printf("{\"ok\":false,\"error\":\"unknown command: %s\"}\n", cmd.c_str());
@@ -980,6 +1046,7 @@ void setup() {
 
   netInit();
   configLoad(cfg);
+  profileBegin(cfg.api, cfg.profile);
   netBegin(cfg.ssid, cfg.pass);
 
   Serial.printf("{\"ok\":%s,\"fw\":\"%s\",\"display\":%s,\"touch\":%s,\"psram\":%u,\"state\":\"%s\"}\n",
@@ -1000,6 +1067,7 @@ void loop() {
   }
 
   netLoop();
+  profileLoop(netConnected(), devState != ST_HOST && devState != ST_SETUP);
   if (devState == ST_CONNECTING && netConnected()) devState = ST_BADGE;
 
   // Poll touch every cycle: latch it so the host never misses one.

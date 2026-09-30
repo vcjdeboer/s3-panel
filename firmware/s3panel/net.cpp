@@ -8,12 +8,24 @@
 #include "util.h"
 
 static bool sntpStarted = false;
+static volatile int lastReason = 0;
+static volatile bool joining = false;  // count only the join's own failures
 
 void netInit() {
   // Arduino otherwise also stores credentials in the IDF's own NVS, where
   // `config forget` would not reach them.
   WiFi.persistent(false);
+  WiFi.onEvent(
+      [](arduino_event_id_t, arduino_event_info_t info) {
+        int r = info.wifi_sta_disconnected.reason;
+        // The retry loop leaves between attempts (STA_LEAVING, ASSOC_LEAVE);
+        // keep the reason the attempt itself failed with.
+        if (joining && r != 36 && r != 8) lastReason = r;
+      },
+      ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
 }
+
+int netLastReason() { return lastReason; }
 
 void netBegin(const char *ssid, const char *pass) {
   if (!ssid[0]) return;
@@ -27,14 +39,25 @@ bool netConnected() { return WiFi.status() == WL_CONNECTED; }
 bool netJoin(const char *ssid, const char *pass, uint32_t timeoutMs) {
   bool ap = (WiFi.getMode() & WIFI_AP) != 0;
   WiFi.mode(ap ? WIFI_AP_STA : WIFI_STA);
-  WiFi.disconnect();
-  delay(100);
+  if (WiFi.status() == WL_CONNECTED) {
+    // Leave the current network, and let that finish, before joining another.
+    WiFi.disconnect();
+    unsigned long t = millis();
+    while (WiFi.status() == WL_CONNECTED && millis() - t < 2000) delay(20);
+    delay(200);
+  }
+  lastReason = 0;
+  joining = true;
   WiFi.begin(ssid, pass);
   unsigned long t0 = millis();
   while (millis() - t0 < timeoutMs) {
-    if (WiFi.status() == WL_CONNECTED) return true;
+    if (WiFi.status() == WL_CONNECTED) {
+      joining = false;
+      return true;
+    }
     delay(100);
   }
+  joining = false;  // our own disconnect below is not a reason
   WiFi.disconnect();
   return false;
 }

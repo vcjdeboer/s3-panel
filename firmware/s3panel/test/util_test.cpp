@@ -77,6 +77,17 @@ int main() {
   htmlEscape("<a&b>\"'", b, sizeof b);
   CHECK_STR(b, "&lt;a&amp;b&gt;&quot;&#39;");
 
+  // Why a Wi-Fi join failed, from ESP-IDF's wifi_err_reason_t.
+  CHECK_STR(joinReasonText(0), "timeout");
+  CHECK_STR(joinReasonText(201), "network not found");
+  CHECK_STR(joinReasonText(202), "wrong password");
+  CHECK_STR(joinReasonText(15), "wrong password");
+  CHECK_STR(joinReasonText(204), "wrong password");
+  CHECK_STR(joinReasonText(2), "wrong password");
+  CHECK_STR(joinReasonText(203), "refused by the router");
+  CHECK_STR(joinReasonText(205), "refused by the router");
+  CHECK_STR(joinReasonText(8), "reason 8");
+
   randomPassword(counter, b, 8);
   CHECK_STR(b, "abcdefgh");
   randomPassword(counter, b, 31);

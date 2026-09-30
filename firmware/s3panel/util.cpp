@@ -191,6 +191,20 @@ void htmlEscape(const char *in, char *out, size_t cap) {
   out[k] = '\0';
 }
 
+const char *joinReasonText(int reason) {
+  static char other[16];
+  switch (reason) {
+    case 0: return "timeout";
+    case 201: return "network not found";              // NO_AP_FOUND
+    case 2: case 15: case 202: case 204:               // AUTH_EXPIRE, 4WAY_HANDSHAKE_TIMEOUT,
+      return "wrong password";                         // AUTH_FAIL, HANDSHAKE_TIMEOUT
+    case 203: case 205: return "refused by the router";  // ASSOC_FAIL, CONNECTION_FAIL
+    default:
+      snprintf(other, sizeof other, "reason %d", reason);
+      return other;
+  }
+}
+
 void randomPassword(uint32_t (*rnd)(), char *out, size_t len) {
   static const char alphabet[] = "abcdefghjkmnpqrstuvwxyz23456789";
   for (size_t i = 0; i < len; i++) out[i] = alphabet[rnd() % (sizeof alphabet - 1)];

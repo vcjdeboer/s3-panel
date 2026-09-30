@@ -166,6 +166,62 @@ const DrawSchema = z.object({
   elapsedMs: z.number(),
 });
 
+/** swamp-club usernames, as the firmware also checks them. */
+export const USERNAME = /^[A-Za-z0-9._-]{1,39}$/;
+
+const ProfileSchema = z.object({
+  username: z.string(),
+  points: z.number(),
+  rank: z.string(),
+  tier: z.number(),
+  badgeCount: z.number(),
+  activityCount: z.number(),
+  fetchedAt: z.iso.datetime().nullable().describe(
+    "When the board fetched it; null when its clock was not set",
+  ),
+  ok: z.boolean().describe("Whether the board's last fetch succeeded"),
+  error: z.string().nullable().describe(
+    "not found, connect, http <code>, parse, or the refusal of config set",
+  ),
+  outcome: OUTCOME_FIELD,
+  observedAt: z.iso.datetime(),
+  elapsedMs: z.number(),
+});
+
+/** The recordable fields of a `profile status` reply, with defaults. */
+export function profileFields(response: Record<string, unknown> | null) {
+  const r = response ?? {};
+  const str = (v: unknown) => typeof v === "string" ? v : "";
+  const num = (v: unknown) => typeof v === "number" ? v : 0;
+  return {
+    username: str(r.username),
+    points: num(r.points),
+    rank: str(r.rank),
+    tier: num(r.tier),
+    badgeCount: num(r.badges),
+    activityCount: num(r.activity),
+    fetchedAt: typeof r.fetchedAt === "number" && r.fetchedAt > 0
+      ? new Date(r.fetchedAt * 1000).toISOString()
+      : null,
+    ok: r.ok === true,
+    error: typeof r.error === "string" ? r.error : null,
+  };
+}
+
+async function recordProfile(
+  ctx: MethodContext,
+  fields: ReturnType<typeof profileFields>,
+  outcome: string,
+  t0: number,
+) {
+  return await ctx.writeResource("profile", "profile-latest", {
+    ...fields,
+    outcome,
+    observedAt: new Date().toISOString(),
+    elapsedMs: Math.round(performance.now() - t0),
+  });
+}
+
 /**
  * Run one drawing command: send it, judge the reply, record it as a drawing
  * operation. A missing reply is recorded as a timeout before it is thrown, so
@@ -533,9 +589,83 @@ export const model = {
       schema: ApprovalSchema,
       ...EVIDENTIARY,
     },
+    "profile": {
+      description:
+        "The swamp-club profile the panel shows, as the board last fetched it",
+      schema: ProfileSchema,
+      ...OBSERVATIONAL,
+    },
   },
   methods: {
     ...baseMethods(),
+
+    profile: {
+      description:
+        "Show a swamp-club profile on the panel (firmware s3panel 0.12, on " +
+        "Wi-Fi). With `username` the board first checks the user exists on " +
+        "swamp-club and stores it; then it fetches now and reports what it " +
+        "shows. Records profile-latest.",
+      arguments: z.object({
+        username: z.string().regex(USERNAME).optional().describe(
+          "swamp-club username; omit to refresh the stored one",
+        ),
+        fetchMs: z.number().int().positive().default(30_000).describe(
+          "Wait for the board's HTTPS fetch; named fetchMs so the global " +
+            "timeoutMs does not clobber this default",
+        ),
+      }),
+      execute: async (
+        args: { username?: string; fetchMs: number },
+        ctx: MethodContext,
+      ) => {
+        const t0 = performance.now();
+        if (args.username !== undefined) {
+          const set = await sendLine(
+            ctx,
+            "config set " + JSON.stringify({ profile: args.username }),
+            args.fetchMs,
+          );
+          if (!set.response || replyFailed(set.response)) {
+            const error = !set.response
+              ? "no reply"
+              : String(set.response.error ?? "refused");
+            const handle = await recordProfile(
+              ctx,
+              { ...profileFields(null), username: args.username, error },
+              set.response ? "error" : "timeout",
+              t0,
+            );
+            throw new Error(
+              `the board did not store the profile ${args.username}: ${error} ` +
+                `(recorded as ${handle.name})`,
+            );
+          }
+        }
+        const r = await sendLine(ctx, "profile refresh", args.fetchMs);
+        const fields = profileFields(r.response);
+        const outcome = !r.response ? "timeout" : (fields.ok ? "ok" : "error");
+        ctx.logger.info("profile {username}: {outcome}", {
+          username: fields.username,
+          outcome,
+        });
+        const handle = await recordProfile(ctx, fields, outcome, t0);
+        if (!r.response) {
+          throw new Error(
+            `no reply to profile refresh within ${args.fetchMs} ms ` +
+              "(recorded as profile-latest, outcome=timeout)",
+          );
+        }
+        if (!fields.ok) {
+          throw new Error(
+            `the board could not fetch the profile: ${
+              fields.error ?? "unknown"
+            } ` +
+              "(recorded as profile-latest)",
+          );
+        }
+        return { dataHandles: [handle] };
+      },
+    },
 
     listen: {
       description:

@@ -25,9 +25,11 @@ import {
   model,
   parseSwampJson,
   type PendingApproval,
+  profileFields,
   resolveApproval,
   type SwampRunner,
   swampBinary,
+  USERNAME,
   waitForTap,
 } from "./s3_panel.ts";
 
@@ -65,6 +67,7 @@ Deno.test("the panel inherits the whole base and adds exactly the screen methods
     "fill",
     "listen",
     "logo",
+    "profile",
     "screen",
     "simtouch",
     "text",
@@ -241,4 +244,46 @@ Deno.test("serial input on the board aborts the wait", async () => {
 Deno.test("a lost link is reported, not waited out", async () => {
   const { send } = fakeBoard([null]);
   assertEquals((await waitForTap(send, 60_000)).ended, "no-reply");
+});
+
+Deno.test("usernames are swamp-club's characters only", () => {
+  assert(USERNAME.test("example"));
+  assert(USERNAME.test("ex.am_ple-1"));
+  assert(!USERNAME.test(""));
+  assert(!USERNAME.test("has space"));
+  assert(!USERNAME.test("a".repeat(40)));
+  assert(!USERNAME.test('x"y'));
+});
+
+Deno.test("profileFields converts epoch seconds and defaults missing fields", () => {
+  const f = profileFields({
+    ok: true,
+    fetchedAt: 1790766990,
+    error: null,
+    username: "example",
+    points: 1234567,
+    rank: "Bog Keeper",
+    tier: 12,
+    badges: 19,
+    activity: 8,
+  });
+  assertEquals(f, {
+    username: "example",
+    points: 1234567,
+    rank: "Bog Keeper",
+    tier: 12,
+    badgeCount: 19,
+    activityCount: 8,
+    fetchedAt: "2026-09-30T11:16:30.000Z",
+    ok: true,
+    error: null,
+  });
+  const failed = profileFields({
+    ok: false,
+    fetchedAt: null,
+    error: "not found",
+  });
+  assertEquals(failed.fetchedAt, null);
+  assertEquals(failed.error, "not found");
+  assertEquals(profileFields(null).ok, false);
 });

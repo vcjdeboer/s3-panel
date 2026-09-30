@@ -9,6 +9,8 @@ void netBegin(const char *ssid, const char *pass);  // background join; no-op if
 bool netConnected();
 // Blocking join, keeping the access point up if it is. false after timeoutMs.
 bool netJoin(const char *ssid, const char *pass, uint32_t timeoutMs);
+// ESP-IDF's reason for the last station disconnect since netJoin started; 0 if none.
+int netLastReason();
 void netApStart(const char *ssid, const char *pass);
 void netApStop();
 int netApClients();

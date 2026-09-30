@@ -41,6 +41,11 @@ the wrong owner of the port, or the panel busy waiting for a tap.
 | Flash | `git clone https://github.com/vcjdeboer/s3-panel`, then `swamp model method run panel flash --input sketchPath=<clone>/firmware/s3panel` |
 | Answer an approval on the panel | `swamp model method run panel approve --input workflow=<wf> --input step=<step>` (background) |
 | Stop a waiting `approve` / `zonewait` | `swamp model cancel panel` (ends within ~2 s, records `cancelled`) |
+| Wi-Fi state of the board | `swamp model method run panel wifi` (firmware 0.12) |
+| Put it on Wi-Fi (credentials from a vault) | a workflow step running `configure` with `vault.get` inputs |
+| Show a swamp-club profile | `swamp model method run panel profile --input username=<name>` |
+| Hand the screen back to the badge | `swamp model method run panel idle` |
+| Factory reset into setup | `swamp model method run panel forget --input confirm=true` |
 | What is waiting for approval | `swamp workflow approvals --json` |
 | What a run did | `swamp workflow history get <run-id> --json` |
 
@@ -63,3 +68,4 @@ the wrong owner of the port, or the panel busy waiting for a tap.
 - Serial, ports, holder, locks and the line protocol: `references/serial-and-holder.md`
 - Approvals end to end, including the user answering in the terminal: `references/approvals.md`
 - Firmware, and changing and publishing the extensions: `references/changing-the-extensions.md`
+- Wi-Fi, setup from a phone and the swamp badge: `references/wifi-and-badge.md`

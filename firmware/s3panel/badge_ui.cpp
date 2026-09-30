@@ -38,20 +38,47 @@ static void setLevel(uint8_t pct) {
   setBacklightPct(pct);
 }
 
-// The footer: why the data may be old, or when it was fetched.
-static void footerNote(const char *lead, char *out, size_t cap) {
+// Why the data may be wrong or old: "" when it is fresh. Drawn large on the
+// profile card, because it changes what the numbers mean.
+static void problemNote(char *out, size_t cap) {
   char age[16];
   relativeAge(netNow(), profileData().fetchedAt, age, sizeof age);
   FetchResult r = profileLast();
+  out[0] = '\0';
   if (r == FETCH_NOT_FOUND) snprintf(out, cap, "user not found");
   else if (r == FETCH_PARSE) snprintf(out, cap, "data error");
   else if (r == FETCH_CONNECT || r == FETCH_HTTP || !netConnected())
     snprintf(out, cap, age[0] ? "offline - %s" : "offline", age);
-  else if (age[0]) snprintf(out, cap, "%s - updated %s", lead, age);
+}
+
+// The small footer: what a tap does, and how fresh the data is.
+static void footerNote(const char *lead, bool problem, char *out, size_t cap) {
+  char age[16];
+  relativeAge(netNow(), profileData().fetchedAt, age, sizeof age);
+  if (!problem && age[0]) snprintf(out, cap, "%s - updated %s", lead, age);
   else snprintf(out, cap, "%s", lead);
 }
 
+// The stored user no longer exists on swamp-club: its old numbers would only
+// mislead, so show the name, the problem and the way out instead.
+static void drawNotFound() {
+  drawMiniLogo("PROFILE");
+  centered(175, 3, RGB565_WHITE, profileUsername());  // what was looked up
+  gfx->fillRect(0, 225, SCREEN_W, 40, PINK_TXT);
+  centered(237, 2, RGB565_BLACK, "user not found");
+  centered(300, 2, RGB565_WHITE, "check the name on");
+  centered(325, 2, RGB565_WHITE, "swamp-club");
+  centered(380, 2, CYAN_DIM, "hold 5 s on the logo");
+  centered(405, 2, CYAN_DIM, "to set up again");
+  centered(462, 1, CYAN_DIM, "tap for logo");
+  gfx->flush();
+}
+
 static void drawProfile() {
+  if (profileLast() == FETCH_NOT_FOUND) {
+    drawNotFound();
+    return;
+  }
   const Profile &p = profileData();
   char buf[64], num[24];
   drawMiniLogo("PROFILE");
@@ -67,7 +94,13 @@ static void drawProfile() {
   formatThousands(p.totalEvents, num, sizeof num);
   snprintf(buf, sizeof buf, "%s events", num);
   centered(355, 2, RGB565_WHITE, buf);
-  footerNote("tap for badges", buf, sizeof buf);
+  char problem[40];
+  problemNote(problem, sizeof problem);
+  if (problem[0]) {  // a banner, as for APPROVED/REJECTED: it changes what the numbers mean
+    gfx->fillRect(0, 392, SCREEN_W, 40, PINK_TXT);
+    centered(404, 2, RGB565_BLACK, problem);
+  }
+  footerNote("tap for badges", problem[0] != 0, buf, sizeof buf);
   centered(462, 1, CYAN_DIM, buf);
   gfx->flush();
 }
@@ -170,7 +203,9 @@ bool uiBadgeTap() {
     return true;
   }
   if (!profileHave()) return false;
-  show((UiView)((view + 1) % 4));
+  UiView next = (UiView)((view + 1) % 4);
+  if (profileLast() == FETCH_NOT_FOUND && next != VIEW_PROFILE) next = VIEW_LOGO;  // no stale badges
+  show(next);
   return true;
 }
 

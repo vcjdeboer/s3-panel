@@ -16,6 +16,7 @@ bool profileWaitIdle(uint32_t timeoutMs);  // before any synchronous profileFetc
 void profileNoteTap();                                     // fetch on the next loop if stale
 bool profileHave();
 const Profile &profileData();
+const char *profileUsername();  // the stored name being looked up (not fetched data)
 FetchResult profileLast();
 const char *profileParseNote();  // after FETCH_PARSE: "user IncompleteInput" etc.
 uint32_t profileGeneration();  // changes whenever profileData() does

@@ -218,6 +218,12 @@ Answer one JSON object per command line. The commands this type sends:
 | `screen add {"type":"button","id":"approve","text":"APPROVE"}` | `{"ok":true,"index":6}` |
 | `screen show` | `{"ok":true,"elements":7,"zones":2}` |
 | `screen wait 2000` | `{"ok":true,"id":"approve","x":160,"y":400}` on a tap, `{"ok":true,"timeout":true}` on expiry, `{"ok":true,"aborted":true}` if a serial line arrives first (that line is consumed, not run) |
+| `wifi status` | `{"ok":true,"state":"badge","connected":true,"ip":"...","rssi":-68,"mac":"..."}` |
+| `config set {"ssid":"...","pass":"..."}` | `{"ok":true,"stored":["ssid","pass"],"joined":true}`, or `{"ok":false,"error":"join: wrong password"}` |
+| `config set {"profile":"example"}` | `{"ok":true,"stored":["profile"],"joined":true}`, or `{"ok":false,"error":"not found"}` |
+| `config forget` | `{"ok":true,"forgotten":true}` |
+| `profile refresh` | `{"ok":true,"fetchedAt":1790766990,"error":null,"username":"example","points":1234567,"rank":"Bog Keeper","tier":12,"badges":19,"activity":8,"cached":true}` |
+| `idle` | `{"ok":true,"state":"badge"}` |
 
 A reply with `"ok":false` is recorded as `outcome=error` and then thrown, with
 the board's own `error` string in the message.
@@ -225,6 +231,15 @@ the board's own `error` string in the message.
 The reference firmware, [`firmware/s3panel`](firmware/s3panel/s3panel.ino), is
 written for the JC3248W535 (see [Hardware](#hardware)); any firmware answering
 the commands above will do.
+
+## Badge
+
+Firmware 0.12 can also run on its own as a swamp badge: it joins Wi-Fi, fetches a
+swamp-club profile over HTTPS, and shows points, badges and recent activity when
+tapped. A new panel starts in setup mode and is configured from a phone (hotspot
+and QR codes); from swamp, `configure` (Wi-Fi from a vault), `profile` and `forget`
+do the same over USB. Swamp can still borrow the screen at any time; `idle` hands it
+back. Details: `.claude/skills/driving-s3-panel/references/wifi-and-badge.md`.
 
 ## Relationship to `@vcjdeboer/esp32-s3`
 

@@ -218,6 +218,7 @@ FetchResult profileRefresh() {
 void profileNoteTap() { tapWanted = true; }
 bool profileHave() { return have; }
 const Profile &profileData() { return current; }
+const char *profileUsername() { return user; }
 FetchResult profileLast() { return last; }
 uint32_t profileGeneration() { return generation; }
 const char *profileParseNote() { return parseNote; }

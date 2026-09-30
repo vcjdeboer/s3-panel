@@ -70,8 +70,9 @@ with an apostrophe as `printf 'Name\047s Network' | swamp vault put <vault> wifi
 | `idle` | `{"ok":true,"state":"badge"}` |
 
 `status` also reports `state` and `heap`. Replies never contain a password or
-an SSID value. Scheduled fetches (every 15 min, or on a tap when the data is
-over 5 min old) run in the background and do not block USB commands;
+an SSID value. Scheduled fetches run in the background and do not block USB
+commands: the whole profile every 15 min (or on a tap when it is over 5 min
+old), and the activity log alone every 30 s (not cached, so no flash wear);
 `profile refresh` and `config set` with a profile wait for the answer.
 
 ## Symptoms

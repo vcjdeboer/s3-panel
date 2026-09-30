@@ -133,6 +133,12 @@ int main() {
     CHECK(events == 0);
   }
 
+  // The setup form: a typed network name wins over the drop-down, exactly as typed.
+  CHECK_STR(pickSsid("Strongest Net", ""), "Strongest Net");
+  CHECK_STR(pickSsid("Strongest Net", "Hidden Net"), "Hidden Net");
+  CHECK_STR(pickSsid("", "  spaced  name "), "  spaced  name ");
+  CHECK_STR(pickSsid("", ""), "");
+
   randomPassword(counter, b, 8);
   CHECK_STR(b, "abcdefgh");
   randomPassword(counter, b, 31);

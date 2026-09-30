@@ -29,7 +29,8 @@ int netLastReason() { return lastReason; }
 
 void netBegin(const char *ssid, const char *pass) {
   if (!ssid[0]) return;
-  WiFi.mode(WIFI_STA);
+  bool ap = (WiFi.getMode() & WIFI_AP) != 0;  // keep a setup hotspot up
+  WiFi.mode(ap ? WIFI_AP_STA : WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.begin(ssid, pass);
 }

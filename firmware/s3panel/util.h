@@ -24,6 +24,8 @@ bool validUsername(const char *s);
 // WIFI:T:WPA;S:<ssid>;P:<pass>;; with \ ; , : " escaped.
 void wifiQrText(const char *ssid, const char *pass, char *out, size_t cap);
 void htmlEscape(const char *in, char *out, size_t cap);
+// The setup form's network: a typed name ("other") wins over the drop-down.
+const char *pickSsid(const char *selected, const char *other);
 // Touch debouncing. The controller reports "no finger" for a few ms mid-press,
 // so a release counts only after TAP_RELEASE_MS without contact. A press of
 // under TAP_MAX_MS is a TAP (reported at release); TAP_HOLD_MS of contact is

@@ -25,14 +25,17 @@ static bool tapWanted = false;
 static uint32_t generation = 0;
 static char parseNote[40] = "";  // which request failed to parse, and how
 
-static const unsigned long REFRESH_MS = 15UL * 60 * 1000;
+static const unsigned long REFRESH_MS = 15UL * 60 * 1000;  // whole profile
+static const unsigned long ACTIVITY_MS = 30UL * 1000;      // combat log only (~3 KB)
 static const unsigned long STALE_ON_TAP_MS = 5UL * 60 * 1000;
 static const unsigned long MIN_TAP_GAP_MS = 60UL * 1000;
 static const unsigned long BACKOFF_MS[] = {60000UL, 120000UL, 300000UL, 900000UL};
 
-static FetchResult getJson(const String &url, JsonDocument &filter, JsonDocument &doc, int &code) {
+static FetchResult getJson(const String &url, JsonDocument &filter, JsonDocument &doc, int &code,
+                           char *note, size_t noteCap) {
   NetworkClientSecure client;
   client.useBuiltinCACertBundle();
+  client.setHandshakeTimeout(10);  // seconds; the default is 120
   HTTPClient http;
   http.useHTTP10(true);  // no chunked encoding
   http.setConnectTimeout(8000);
@@ -50,48 +53,77 @@ static FetchResult getJson(const String &url, JsonDocument &filter, JsonDocument
     // (IncompleteInput). ~50 KB, which lands in PSRAM.
     String body = http.getString();
     DeserializationError e = deserializeJson(doc, body, DeserializationOption::Filter(filter));
-    strlcpy(parseNote, e.c_str(), sizeof parseNote);
+    strlcpy(note, e.c_str(), noteCap);
     r = e ? FETCH_PARSE : FETCH_OK;
   }
   http.end();
   return r;
 }
 
-FetchResult profileFetch(const char *apiBase, const char *username, Profile &out, int &code) {
-  static Profile t;  // static: 2 KB off the loop task's stack
+// One fetch into caller-owned buffers, so the worker and a synchronous caller
+// can never overwrite each other's work.
+static FetchResult fetchInto(const char *apiBase, const char *username, Profile &out, int &code,
+                             Profile &t, char *note, size_t noteCap) {
   memset(&t, 0, sizeof t);
+  note[0] = '\0';
   String base = String(apiBase) + "/api/v1/users/" + username;
   {
     JsonDocument filter, doc;
     userFilter(filter);
-    FetchResult r = getJson(base, filter, doc, code);
+    FetchResult r = getJson(base, filter, doc, code, note, noteCap);
     if (r == FETCH_PARSE) {
       char n[40];
-      snprintf(n, sizeof n, "user %s", parseNote);
-      strlcpy(parseNote, n, sizeof parseNote);
+      snprintf(n, sizeof n, "user %s", note);
+      strlcpy(note, n, noteCap);
     }
     if (r != FETCH_OK) return r;
-    if (r == FETCH_PARSE) return r;
     if (!parseUser(doc, t)) {
-      strlcpy(parseNote, "shape", sizeof parseNote);
+      strlcpy(note, "user shape", noteCap);
       return FETCH_PARSE;
     }
   }
   {
     JsonDocument filter, doc;
     activityFilter(filter);
-    FetchResult r = getJson(base + "/combat-log?limit=8", filter, doc, code);
-    if (r == FETCH_PARSE) {
-      char n[40];
-      snprintf(n, sizeof n, "activity %s", parseNote);
-      strlcpy(parseNote, n, sizeof parseNote);
+    FetchResult r = getJson(base + "/combat-log?limit=8", filter, doc, code, note, noteCap);
+    if (r == FETCH_NOT_FOUND) {
+      r = FETCH_OK;  // the user exists (above): no combat log is no activity
+      t.activityCount = 0;
+    } else {
+      if (r == FETCH_PARSE) {
+        char n[40];
+        snprintf(n, sizeof n, "activity %s", note);
+        strlcpy(note, n, noteCap);
+      }
+      if (r != FETCH_OK) return r;
+      if (!parseActivity(doc, t)) {
+        strlcpy(note, "activity shape", noteCap);
+        return FETCH_PARSE;
+      }
     }
-    if (r != FETCH_OK) return r;
-    if (!parseActivity(doc, t)) return FETCH_PARSE;
   }
   t.fetchedAt = netNow();
   out = t;
   return FETCH_OK;
+}
+
+// Only the combat log, into t.activity (t is scratch). Cheap enough to run
+// every ACTIVITY_MS; never cached, so frequent updates cost no flash wear.
+static FetchResult fetchActivityInto(const char *apiBase, const char *username, int &code,
+                                     Profile &t, char *note, size_t noteCap) {
+  memset(&t, 0, sizeof t);
+  String url = String(apiBase) + "/api/v1/users/" + username + "/combat-log?limit=8";
+  JsonDocument filter, doc;
+  activityFilter(filter);
+  FetchResult r = getJson(url, filter, doc, code, note, noteCap);
+  if (r != FETCH_OK) return r;
+  return parseActivity(doc, t) ? FETCH_OK : FETCH_PARSE;
+}
+
+// Synchronous callers (loop task only: profile refresh, config set, setup).
+FetchResult profileFetch(const char *apiBase, const char *username, Profile &out, int &code) {
+  static Profile t;  // static: 2 KB off the loop task's stack
+  return fetchInto(apiBase, username, out, code, t, parseNote, sizeof parseNote);
 }
 
 void profileAdopt(const Profile &p) {
@@ -113,6 +145,10 @@ void profileAdopt(const Profile &p) {
 // Synchronous fetches (profileRefresh, config set, setup) first wait for the
 // worker to be idle, since profileFetch's buffers are shared.
 static TaskHandle_t worker = nullptr;
+static Profile bgScratch;  // the worker's own buffers
+static char bgNote[40];
+static volatile bool bgActivityOnly = false;  // the job the worker is on
+static unsigned long nextActivityMs = 0;
 static volatile bool bgBusy = false;
 static volatile bool bgReady = false;
 static Profile bgOut;
@@ -125,7 +161,12 @@ static volatile uint32_t bgEpoch = 0;
 static void workerTask(void *) {
   for (;;) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    bgResult = profileFetch(bgApi, bgUser, bgOut, bgCode);
+    if (bgActivityOnly) {
+      bgResult = fetchActivityInto(bgApi, bgUser, bgCode, bgScratch, bgNote, sizeof bgNote);
+      if (bgResult == FETCH_OK) bgOut = bgScratch;  // only .activity is meaningful
+    } else {
+      bgResult = fetchInto(bgApi, bgUser, bgOut, bgCode, bgScratch, bgNote, sizeof bgNote);
+    }
     bgReady = true;
     bgBusy = false;
   }
@@ -173,7 +214,21 @@ static void settle(FetchResult r, const Profile &fresh, int code) {
 void profileLoop(bool wifiUp, bool mayFetch) {
   if (bgReady) {
     bgReady = false;
-    if (bgEpoch == epoch) settle(bgResult, bgOut, bgCode);
+    if (bgEpoch != epoch) {
+      // settings changed while it ran: drop it
+    } else if (bgActivityOnly) {
+      // Merge new activity into what the screens show; failures are silent
+      // (the next full fetch reports real problems).
+      if (bgResult == FETCH_OK && have &&
+          (bgOut.activityCount != current.activityCount ||
+           memcmp(bgOut.activity, current.activity, sizeof current.activity) != 0)) {
+        current.activityCount = bgOut.activityCount;
+        memcpy(current.activity, bgOut.activity, sizeof current.activity);
+        generation++;
+      }
+    } else {
+      settle(bgResult, bgOut, bgCode);
+    }
   }
   if (!user[0] || stopped || !wifiUp || !mayFetch || bgBusy || !worker) return;
   unsigned long now = millis();
@@ -182,9 +237,14 @@ void profileLoop(bool wifiUp, bool mayFetch) {
     tapWanted = false;
     if ((!have || now - lastOkMs > STALE_ON_TAP_MS) && now - lastAttemptMs > MIN_TAP_GAP_MS) due = true;
   }
-  if (!due) return;
-  lastAttemptMs = now;
-  nextDueMs = now + REFRESH_MS;  // settle() sets the real next time
+  bool activityDue = have && (long)(now - nextActivityMs) >= 0;
+  if (!due && !activityDue) return;
+  bgActivityOnly = !due;
+  nextActivityMs = now + ACTIVITY_MS;
+  if (due) {
+    lastAttemptMs = now;
+    nextDueMs = now + REFRESH_MS;  // settle() sets the real next time
+  }
   strlcpy(bgApi, api, sizeof bgApi);
   strlcpy(bgUser, user, sizeof bgUser);
   bgEpoch = epoch;
@@ -205,7 +265,7 @@ FetchResult profileRefresh() {
   profileWaitIdle(30000);
   if (bgReady) {  // a background fetch just finished: take it first
     bgReady = false;
-    if (bgEpoch == epoch) settle(bgResult, bgOut, bgCode);
+    if (bgEpoch == epoch && !bgActivityOnly) settle(bgResult, bgOut, bgCode);  // an activity-only result is superseded by this fetch
   }
   static Profile next;
   int code = 0;

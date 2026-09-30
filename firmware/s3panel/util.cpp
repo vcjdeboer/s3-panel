@@ -191,6 +191,10 @@ void htmlEscape(const char *in, char *out, size_t cap) {
   out[k] = '\0';
 }
 
+const char *pickSsid(const char *selected, const char *other) {
+  return (other && other[0]) ? other : selected;
+}
+
 TouchEvent tapFilterFeed(TapFilter &f, bool touching, uint32_t now) {
   if (touching) {
     if (!f.down) {

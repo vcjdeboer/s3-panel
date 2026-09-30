@@ -57,14 +57,23 @@ static void sendForm() {
   h += "<form method=post action=/save><label>Wi-Fi network<select name=ssid>";
   for (int i = 0; i < netCount; i++) {
     htmlEscape(nets[i], esc, sizeof esc);
-    h += "<option";
+    h += "<option value=\"";  // explicit value: option text gets whitespace-trimmed
+    h += esc;
+    h += "\"";
     if (!strcmp(nets[i], wantSsid)) h += " selected";
     h += ">";
     h += esc;
     h += "</option>";
   }
+  bool listed = false;
+  for (int i = 0; i < netCount; i++) listed = listed || !strcmp(nets[i], wantSsid);
   h += "<option value=''>other...</option></select></label>";
-  h += "<label>other network name<input name=other maxlength=32></label>";
+  h += "<label>other network name (wins if filled in)<input name=other maxlength=32 value=\"";
+  if (!listed) {
+    htmlEscape(wantSsid, esc, sizeof esc);
+    h += esc;
+  }
+  h += "\"></label>";
   h += "<label>Wi-Fi password<input name=pass type=password maxlength=63></label>";
   htmlEscape(wantUser, esc, sizeof esc);
   h += "<label>swamp username<input name=user maxlength=39 autocapitalize=off "
@@ -96,8 +105,8 @@ static void redirectHome() {
 
 static void handleSave() {
   note();
-  String ssid = server->arg("ssid");
-  if (!ssid.length()) ssid = server->arg("other");
+  String selected = server->arg("ssid"), other = server->arg("other");
+  String ssid = pickSsid(selected.c_str(), other.c_str());
   String pass = server->arg("pass");
   String user = server->arg("user");
   user.trim();

@@ -17,6 +17,12 @@ channel. Once set up, a USB charger is enough.
 `host` ends on `idle`, or 5 minutes after the last host command. `wifi`
 reports the state.
 
+On the badge, taps cycle logo, profile, badges, activity; a page stays until
+the next tap. Activity is listed oldest to newest (newest at the bottom), and
+rows that arrive while the page is open flash cyan for 2 s. After 5 minutes
+without a touch the backlight dims to 15 %, after 10 minutes it goes dark, on
+any page; only a tap wakes it (the first tap just wakes), never new activity.
+
 ## Set up
 
 - **From a phone (a shipped panel):** power it. Scan the first QR code to join

@@ -268,9 +268,14 @@ export function carriesWifiCredentials(line: string): boolean {
   }
 }
 
-/** Whether any line of `data`, as the board splits it, carries credentials. */
+/**
+ * Whether any line of `data` carries credentials, read both ways a board may
+ * split it: s3panel drops every `\r` and splits on `\n`, so `config\r set`
+ * arrives as `config set`; another firmware may end lines at `\r` too.
+ */
 export function anyLineCarriesWifiCredentials(data: string): boolean {
-  return data.split(/[\r\n]/).some(carriesWifiCredentials);
+  return data.replace(/\r/g, "").split("\n").some(carriesWifiCredentials) ||
+    data.split(/[\r\n]/).some(carriesWifiCredentials);
 }
 
 const CREDENTIALS_REFUSED =
@@ -311,8 +316,12 @@ export function maskSecrets(
   secrets: string[],
 ): string | null {
   if (text === null) return null;
-  return secrets.filter((s) => s.length > 0)
-    .reduce((t, s) => t.split(s).join("***"), text);
+  // Each value as sent and as it appears inside a JSON string; longest first,
+  // so an SSID inside the password cannot break the password's match.
+  const forms = secrets.filter((s) => s.length > 0)
+    .flatMap((s) => [s, JSON.stringify(s).slice(1, -1)])
+    .sort((a, b) => b.length - a.length);
+  return forms.reduce((t, s) => t.split(s).join("***"), text);
 }
 
 type Reply = Record<string, unknown> | null;

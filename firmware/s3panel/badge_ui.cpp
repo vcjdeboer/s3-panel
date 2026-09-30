@@ -17,7 +17,7 @@ static uint32_t drawnGeneration = 0;
 
 static const unsigned long DIM_MS = 5UL * 60 * 1000;   // any page: 15 %
 static const unsigned long OFF_MS = 10UL * 60 * 1000;  // any page: dark
-static const unsigned long HIGHLIGHT_MS = 5UL * 1000;  // new activity rows
+static const unsigned long HIGHLIGHT_MS = 2UL * 1000;  // new activity rows
 
 // Activity rows that arrived recently, highlighted until `until` (by content,
 // so they stay marked however the list shifts). Tracked on every page.

@@ -1,0 +1,16 @@
+{
+  "username": "example",
+  "name": "Example Person",
+  "email": null,
+  "canonicalScore": 1234567,
+  "activityScore": 999999,
+  "signInStreak": 42,
+  "tierData": {"tierName": "Bog Keeper", "tier": 4, "ordinal": 12, "isAdmin": false},
+  "stats": {"activeDays": 100, "totalEvents": 54321, "status": "ready"},
+  "writings": [{"title": "ignored", "note": "a long field the filter must drop"}],
+  "badges": [
+    {"badgeId": "OG_SWAMPER", "name": "OG Swamper", "description": "Among the first.", "visual": "og", "awardedAt": "2026-06-07T19:37:15.286Z"},
+    {"badgeId": "QUEST_T02_PRISMATIC", "name": "Marshlight · Prismatic", "visual": "quest-free", "awardedAt": "2026-09-01T08:00:00.000Z"},
+    {"badgeId": "QUALITY_INITIATE", "name": "Quality Initiate", "visual": "quality", "awardedAt": "2026-06-21T20:24:46.858Z"}
+  ]
+}

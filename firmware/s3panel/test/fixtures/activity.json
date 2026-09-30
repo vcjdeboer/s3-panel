@@ -1,0 +1,4 @@
+{"username": "example", "count": 2, "entries": [
+  {"key": "a1", "grantedAt": "2026-09-30T11:16:30.908Z", "grantType": "activity", "source": "telemetry", "amount": 333, "baseAmount": 200, "multiplier": 1.664, "title": "model method ×2", "href": "/u/example"},
+  {"key": "a2", "grantedAt": "2026-09-30T10:58:00.000Z", "grantType": "activity", "source": "telemetry", "amount": 1331, "baseAmount": 800, "multiplier": 1.664, "title": "workflow validate ×8", "href": "/u/example"}
+], "nextBefore": "2026-09-30T10:58:00.000Z"}
